@@ -137,17 +137,47 @@ const applyRuleOverrides = (issues: Issue[], configRules?: Record<string, RuleCo
   });
 };
 
+const parseSuppressionExpiry = (value: string): number | undefined => {
+  const dateOnlyMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]);
+    const day = Number(dateOnlyMatch[3]);
+
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day) ||
+      month < 1 ||
+      month > 12 ||
+      day < 1 ||
+      day > 31
+    ) {
+      return undefined;
+    }
+
+    return new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  }
+
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+
+  return parsed;
+};
+
 const isSuppressionExpired = (suppression: SuppressionConfig): boolean => {
   if (!suppression.expiresOn) {
     return false;
   }
 
-  const parsed = Date.parse(suppression.expiresOn);
-  if (Number.isNaN(parsed)) {
+  const expiresAt = parseSuppressionExpiry(suppression.expiresOn);
+  if (expiresAt === undefined) {
     return false;
   }
 
-  return Date.now() > parsed;
+  return Date.now() > expiresAt;
 };
 
 const suppressionMatches = (issue: Issue, suppression: SuppressionConfig): boolean => {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { reviewBatch, reviewDiff } from "../../src/engine/reviewEngine";
 import type { Rule } from "../../src/types";
@@ -409,6 +409,78 @@ describe("reviewDiff", () => {
       );
       expect(disabledRule.issues).toHaveLength(0);
     } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps date-only suppression valid through local end-of-day", async () => {
+    vi.useFakeTimers();
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const taskPath = path.join(workspaceRoot, "src/task.ts");
+      await writeFile(
+        taskPath,
+        ['import { unusedHelper } from "./util";', "export const value = 1;", ""].join("\n"),
+      );
+
+      const diff = [
+        "diff --git a/src/task.ts b/src/task.ts",
+        "--- a/src/task.ts",
+        "+++ b/src/task.ts",
+        "@@ -1,1 +1,2 @@",
+        '+import { unusedHelper } from "./util";',
+        " export const value = 1;",
+      ].join("\n");
+
+      vi.setSystemTime(new Date(2027, 11, 31, 12, 0, 0, 0));
+      const activeOnSameDay = await reviewDiff(
+        {
+          diff,
+          files: ["src/task.ts"],
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [taskPath],
+          config: {
+            suppressions: [
+              {
+                ruleId: "DG003",
+                file: "src/task.ts",
+                expiresOn: "2027-12-31",
+              },
+            ],
+          },
+        },
+      );
+
+      expect(activeOnSameDay.issues).toHaveLength(0);
+
+      vi.setSystemTime(new Date(2028, 0, 1, 0, 0, 0, 0));
+      const expiredNextDay = await reviewDiff(
+        {
+          diff,
+          files: ["src/task.ts"],
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [taskPath],
+          config: {
+            suppressions: [
+              {
+                ruleId: "DG003",
+                file: "src/task.ts",
+                expiresOn: "2027-12-31",
+              },
+            ],
+          },
+        },
+      );
+
+      expect(expiredNextDay.issues).toHaveLength(1);
+      expect(expiredNextDay.issues[0]?.ruleId).toBe("DG003");
+    } finally {
+      vi.useRealTimers();
       await rm(workspaceRoot, { recursive: true, force: true });
     }
   });

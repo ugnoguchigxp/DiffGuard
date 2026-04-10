@@ -150,6 +150,48 @@ describe("buildContext", () => {
     }
   });
 
+  it("refreshes discovered src files between calls", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const modelPath = path.join(workspaceRoot, "src/models.ts");
+      const consumerPath = path.join(workspaceRoot, "src/consumer.ts");
+      await writeFile(modelPath, "export interface User { id: string; name: string; }\n");
+
+      const diff = [
+        "diff --git a/src/models.ts b/src/models.ts",
+        "--- a/src/models.ts",
+        "+++ b/src/models.ts",
+        "@@ -1,1 +1,1 @@",
+        "-export interface User { id: string; }",
+        "+export interface User { id: string; name: string; }",
+      ].join("\n");
+
+      const first = await buildContext(analyzeDiff(diff), {
+        workspaceRoot,
+      });
+
+      expect(first.unhandledUsage).toBe(false);
+
+      await writeFile(
+        consumerPath,
+        [
+          'import type { User } from "./models";',
+          "export const getName = (user: User): string => user.name;",
+          "",
+        ].join("\n"),
+      );
+
+      const second = await buildContext(analyzeDiff(diff), {
+        workspaceRoot,
+      });
+
+      expect(second.unhandledUsage).toBe(true);
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not mark missing call sites when call updates are included in diff", async () => {
     const workspaceRoot = await createTempWorkspace();
 

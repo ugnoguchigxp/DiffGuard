@@ -5,8 +5,6 @@ import { Project, type SourceFile, SyntaxKind } from "ts-morph";
 
 import type { DiffAnalysis, ReviewContext } from "../types";
 
-const fileDiscoveryCache = new Map<string, string[]>();
-
 const normalizePath = (value: string): string => {
   return value.replace(/\\/g, "/").replace(/^\.\//, "");
 };
@@ -16,11 +14,6 @@ const resolveAbsolutePath = (workspaceRoot: string, value: string): string => {
 };
 
 const collectTypeScriptFiles = async (directoryPath: string): Promise<string[]> => {
-  const cached = fileDiscoveryCache.get(directoryPath);
-  if (cached) {
-    return cached;
-  }
-
   if (!existsSync(directoryPath)) {
     return [];
   }
@@ -40,7 +33,6 @@ const collectTypeScriptFiles = async (directoryPath: string): Promise<string[]> 
     }
   }
 
-  fileDiscoveryCache.set(directoryPath, files);
   return files;
 };
 

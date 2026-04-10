@@ -66,6 +66,97 @@ diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]
 - `--llm-related-code-file <path>`: LLM に渡す関連コード
 - `--pretty`: 整形出力
 
+## MCP（IDE 連携）
+
+DiffGuard の機能を IDE から呼び出すための MCP サーバーを同梱しています（stdio）。
+
+起動:
+
+```bash
+pnpm mcp
+```
+
+公開ツール:
+
+- `analyze_diff`: diff の変更タイプとファイル分析を返す
+- `review_diff`: 単一 diff をレビューして JSON または SARIF を返す
+- `review_batch`: 複数 diff をまとめてレビューする
+
+IDE 側設定例（MCP クライアント共通の command/args 形式）:
+
+```json
+{
+  "mcpServers": {
+    "diffguard": {
+      "command": "pnpm",
+      "args": ["--dir", "/absolute/path/to/diffGuard", "mcp"]
+    }
+  }
+}
+```
+
+### Cursor での登録
+
+1. Cursor の `Settings` から MCP 設定を開き、サーバーを追加する  
+2. もしくはプロジェクト直下の `.cursor/mcp.json`（プロジェクト単位）または `~/.cursor/mcp.json`（グローバル）に以下を記載
+
+```json
+{
+  "mcpServers": {
+    "diffguard": {
+      "command": "pnpm",
+      "args": ["--dir", "/absolute/path/to/diffGuard", "mcp"]
+    }
+  }
+}
+```
+
+補足:
+
+- `node` で直接起動する場合は `command: "node"` と `args: ["/absolute/path/to/diffGuard/dist/mcp/server.js"]`
+- 設定変更後、反映されない場合は Cursor を再起動
+
+### GitHub Copilot CLI での登録
+
+Copilot CLI では次の 2 つの方法があります。
+
+1. 対話モードで `/mcp add` を実行して追加  
+2. `~/.copilot/mcp-config.json` を直接編集して追加
+
+`~/.copilot/mcp-config.json` 例:
+
+```json
+{
+  "mcpServers": {
+    "diffguard": {
+      "type": "local",
+      "command": "pnpm",
+      "args": ["--dir", "/absolute/path/to/diffGuard", "mcp"],
+      "env": {},
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+補足:
+
+- `tools` で公開ツールを絞る場合は `["review_diff"]` などを指定可能
+- 状態確認は Copilot CLI の `/mcp show` を利用
+
+ビルド済み `dist` を使う場合:
+
+```json
+{
+  "mcpServers": {
+    "diffguard": {
+      "command": "node",
+      "args": ["/absolute/path/to/diffGuard/dist/mcp/server.js"]
+    }
+  }
+}
+```
+
 ## LLM 連携（gemma4 / bonsai / localLlm）
 
 ### 有効化の優先順位
@@ -190,6 +281,11 @@ cat /path/to/astmend.diff | pnpm cli -- --workspace-root /path/to/repo --fail-on
   }
 }
 ```
+
+`suppressions[].expiresOn` の扱い:
+
+- `YYYY-MM-DD`: ローカルタイムゾーンの当日 `23:59:59.999` まで有効
+- ISO日時（例: `2027-12-31T15:00:00+09:00`）: 指定した時刻を過ぎると失効
 
 ## 出力
 

@@ -43,42 +43,68 @@ const runCommand = (
   input?: string,
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
-    const process = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const finishResolve = (value: string): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+
+    const finishReject = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
 
     const timeout = setTimeout(() => {
-      process.kill("SIGTERM");
-      reject(new Error(`Gemma command timed out after ${timeoutMs}ms`));
+      child.kill("SIGTERM");
+      finishReject(new Error(`Gemma command timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    process.stdout.on("data", (chunk: Buffer) => {
+    child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString();
     });
 
-    process.stderr.on("data", (chunk: Buffer) => {
+    child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
-    process.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
+    child.on("error", (error) => {
+      finishReject(error);
     });
 
-    process.on("close", (code) => {
-      clearTimeout(timeout);
+    child.on("close", (code) => {
       if (code === 0) {
-        resolve(stdout.trim());
+        finishResolve(stdout.trim());
         return;
       }
 
-      reject(new Error(`Gemma command failed (code=${code}): ${stderr.trim()}`));
+      finishReject(new Error(`Gemma command failed (code=${code}): ${stderr.trim()}`));
+    });
+
+    child.stdin.on("error", (error) => {
+      if ("code" in error && error.code === "EPIPE") {
+        return;
+      }
+      finishReject(error);
     });
 
     if (typeof input === "string") {
-      process.stdin.write(input);
+      child.stdin.end(input);
+      return;
     }
-    process.stdin.end();
+
+    child.stdin.end();
   });
 };
 
