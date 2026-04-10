@@ -2,7 +2,7 @@ import type { Issue, Rule } from "../types";
 
 const CONTROLLER_PATH_PATTERN = /(^|\/)[A-Za-z0-9_-]*controller[A-Za-z0-9_-]*\.(ts|tsx)$/i;
 const NEW_REPOSITORY_PATTERN = /\bnew\s+([A-Za-z_$][\w$]*Repository)\b/;
-const RULE_ID = "DG004";
+const ID = "DG004";
 
 const resolveLocation = (
   ctx: Parameters<Rule["run"]>[0],
@@ -35,21 +35,27 @@ const resolveLocation = (
 };
 
 const buildIssue = (location: ReturnType<typeof resolveLocation>): Issue => {
+  const remediation =
+    "Repository の new を削除し、constructor injection などで依存を受け取ってください。";
   return {
+    id: ID,
     type: "di-violation",
-    ruleId: RULE_ID,
+    ruleId: ID,
     message:
       "Controller 層で Repository の直接生成を検出しました。DI コンテナ経由で注入してください。",
     severity: "error",
     confidence: 0.95,
-    remediation:
-      "Repository の new を削除し、constructor injection などで依存を受け取ってください。",
+    remediation,
     ...location,
+    metadata: {
+      blockingReason: "di-violation",
+      remediation,
+    },
   };
 };
 
 export const diRule: Rule = {
-  id: RULE_ID,
+  id: ID,
   name: "di-violation",
   defaultSeverity: "error",
   defaultConfidence: 0.95,

@@ -9,6 +9,12 @@ describe("toSarif", () => {
         schemaVersion: "1.0.0",
         risk: "high",
         blocking: true,
+        levelCounts: {
+          error: 1,
+          warn: 1,
+          info: 1,
+        },
+        findings: [],
         issues: [
           {
             type: "missing-update",

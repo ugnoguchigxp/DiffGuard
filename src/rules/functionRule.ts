@@ -1,6 +1,6 @@
 import type { Issue, Rule } from "../types";
 
-const RULE_ID = "DG001";
+const ID = "DG001";
 
 const resolveLocation = (
   ctx: Parameters<Rule["run"]>[0],
@@ -31,24 +31,27 @@ const resolveLocation = (
 
 const buildIssue = (location: ReturnType<typeof resolveLocation>): Issue => {
   return {
+    id: ID,
     type: "missing-update",
-    ruleId: RULE_ID,
-    message: "関数シグネチャ変更に対して呼び出し側の更新漏れが疑われます。",
+    ruleId: ID,
+    message: "public API changed without migration note",
     severity: "error",
     confidence: 0.92,
-    remediation:
-      "変更した関数の呼び出し元を追跡し、引数・戻り値・型定義の整合性を更新してください。",
+    remediation: "restore original signature or add adapter layer",
     ...location,
+    metadata: {
+      blockingReason: "api-compatibility",
+      remediation: "restore original signature or add adapter layer",
+    },
   };
 };
 
 export const functionRule: Rule = {
-  id: RULE_ID,
+  id: ID,
   name: "function-signature-missing-update",
   defaultSeverity: "error",
   defaultConfidence: 0.92,
-  defaultRemediation:
-    "変更した関数の呼び出し元を追跡し、引数・戻り値・型定義の整合性を更新してください。",
+  defaultRemediation: "restore original signature or add adapter layer",
   run: (ctx) => {
     if (!ctx.functionChanged || !ctx.missingCallSites) {
       return [];

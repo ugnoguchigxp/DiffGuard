@@ -15,7 +15,13 @@ export const reviewBatchInputSchema = z.object({
   items: z.array(reviewInputSchema),
 });
 
+export const issueMetadataSchema = z.object({
+  blockingReason: z.string().optional(),
+  remediation: z.string().optional(),
+});
+
 export const issueSchema = z.object({
+  id: z.string().min(1).optional(),
   type: issueTypeSchema,
   ruleId: z.string().min(1),
   message: z.string().min(1),
@@ -26,6 +32,27 @@ export const issueSchema = z.object({
   line: z.number().int().positive().optional(),
   hunk: z.string().min(1).optional(),
   symbol: z.string().min(1).optional(),
+  metadata: issueMetadataSchema.optional(),
+});
+
+export const findingMetadataSchema = issueMetadataSchema.extend({
+  remediation: z.string().min(1),
+});
+
+export const findingSchema = z.object({
+  id: z.string().min(1),
+  level: severitySchema,
+  message: z.string().min(1),
+  file: z.string().optional(),
+  line: z.number().int().positive().optional(),
+  ruleId: z.string().min(1),
+  metadata: findingMetadataSchema,
+});
+
+export const levelCountsSchema = z.object({
+  error: z.number().int().nonnegative(),
+  warn: z.number().int().nonnegative(),
+  info: z.number().int().nonnegative(),
 });
 
 export const llmReviewSchema = z.object({
@@ -37,6 +64,12 @@ export const reviewResultSchema = z.object({
   schemaVersion: z.string().min(1),
   risk: z.enum(["low", "medium", "high"]),
   blocking: z.boolean(),
+  levelCounts: levelCountsSchema.default({
+    error: 0,
+    warn: 0,
+    info: 0,
+  }),
+  findings: z.array(findingSchema).default([]),
   issues: z.array(issueSchema),
   llm: llmReviewSchema.optional(),
 });

@@ -14,7 +14,13 @@ export interface ReviewBatchInput {
   items: ReviewInput[];
 }
 
+export interface IssueMetadata {
+  blockingReason?: string | undefined;
+  remediation?: string | undefined;
+}
+
 export interface Issue {
+  id?: string | undefined;
   type: IssueType;
   ruleId: string;
   message: string;
@@ -25,6 +31,7 @@ export interface Issue {
   line?: number | undefined;
   hunk?: string | undefined;
   symbol?: string | undefined;
+  metadata?: IssueMetadata | undefined;
 }
 
 export interface LlmReview {
@@ -34,10 +41,22 @@ export interface LlmReview {
 
 export type LlmMode = "gemma-command" | "local-openai-api";
 
+export interface Finding {
+  id: string;
+  level: Severity;
+  message: string;
+  file?: string | undefined;
+  line?: number | undefined;
+  ruleId: string;
+  metadata: IssueMetadata;
+}
+
 export interface ReviewResult {
   schemaVersion: string;
   risk: RiskLevel;
   blocking: boolean;
+  levelCounts: Record<Severity, number>;
+  findings: Finding[];
   issues: Issue[];
   llm?: LlmReview | undefined;
 }

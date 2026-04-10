@@ -34,6 +34,40 @@ describe("review schemas", () => {
     });
 
     expect(parsed.risk).toBe("low");
+    expect(parsed.levelCounts).toEqual({
+      error: 0,
+      warn: 0,
+      info: 0,
+    });
+    expect(parsed.findings).toEqual([]);
+  });
+
+  it("accepts finding metadata with remediation hint", () => {
+    const parsed = reviewResultSchema.parse({
+      schemaVersion: "1.0.0",
+      risk: "high",
+      blocking: true,
+      levelCounts: {
+        error: 1,
+        warn: 0,
+        info: 0,
+      },
+      findings: [
+        {
+          id: "DG001",
+          level: "error",
+          message: "public API changed without migration note",
+          ruleId: "API_BREAK",
+          metadata: {
+            blockingReason: "api-compatibility",
+            remediation: "restore original signature or add adapter layer",
+          },
+        },
+      ],
+      issues: [],
+    });
+
+    expect(parsed.findings[0]?.metadata.remediation).toContain("adapter layer");
   });
 
   it("accepts diffguard config", () => {

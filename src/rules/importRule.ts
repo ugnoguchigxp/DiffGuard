@@ -1,6 +1,6 @@
 import type { Issue, Rule } from "../types";
 
-const RULE_ID = "DG003";
+const ID = "DG003";
 
 const resolveLocation = (
   ctx: Parameters<Rule["run"]>[0],
@@ -25,19 +25,24 @@ const resolveLocation = (
 };
 
 const buildIssue = (location: ReturnType<typeof resolveLocation>): Issue => {
+  const remediation = "不要な import は削除し、必要であれば参照箇所を追加してください。";
   return {
+    id: ID,
     type: "unused-import",
-    ruleId: RULE_ID,
+    ruleId: ID,
     message: "追加された import が未使用の可能性があります。",
     severity: "warn",
     confidence: 0.8,
-    remediation: "不要な import は削除し、必要であれば参照箇所を追加してください。",
+    remediation,
     ...location,
+    metadata: {
+      remediation,
+    },
   };
 };
 
 export const importRule: Rule = {
-  id: RULE_ID,
+  id: ID,
   name: "unused-import",
   defaultSeverity: "warn",
   defaultConfidence: 0.8,

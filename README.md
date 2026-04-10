@@ -294,6 +294,24 @@ cat /path/to/astmend.diff | pnpm cli -- --workspace-root /path/to/repo --fail-on
   "schemaVersion": "1.0.0",
   "risk": "medium",
   "blocking": false,
+  "levelCounts": {
+    "error": 0,
+    "warn": 1,
+    "info": 0
+  },
+  "findings": [
+    {
+      "id": "DG003",
+      "level": "warn",
+      "message": "追加された import が未使用の可能性があります。",
+      "file": "src/task.ts",
+      "line": 1,
+      "ruleId": "UNUSED_IMPORT",
+      "metadata": {
+        "remediation": "不要な import は削除し、必要であれば参照箇所を追加してください。"
+      }
+    }
+  ],
   "issues": [
     {
       "type": "unused-import",
@@ -310,6 +328,8 @@ cat /path/to/astmend.diff | pnpm cli -- --workspace-root /path/to/repo --fail-on
   ]
 }
 ```
+
+`findings[*].ruleId` は機械向けの正規化 ID（例: `API_BREAK`, `UNUSED_IMPORT`）です。`issues[*].ruleId` は既存互換の `DGxxx` を維持します。
 
 `risk` / `blocking`:
 

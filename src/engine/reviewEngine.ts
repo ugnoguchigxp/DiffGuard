@@ -20,17 +20,30 @@ import {
 import type {
   DiffAnalysis,
   DiffGuardConfig,
+  Finding,
   Issue,
+  IssueMetadata,
   LlmReview,
   ReviewInput,
   ReviewResult,
   Rule,
   RuleConfig,
+  Severity,
   SuppressionConfig,
 } from "../types";
 import { computeRisk, isBlocking } from "./risk";
 
 const analysisCache = new LruCache<string, DiffAnalysis>(DEFAULT_CACHE_MAX_ENTRIES);
+const FINDING_RULE_ID_BY_RULE_ID: Record<string, string> = {
+  DG001: "API_BREAK",
+  DG002: "INTERFACE_CHANGE",
+  DG003: "UNUSED_IMPORT",
+  DG004: "DI_VIOLATION",
+};
+const BLOCKING_REASON_BY_FINDING_RULE_ID: Record<string, string> = {
+  API_BREAK: "api-compatibility",
+  DI_VIOLATION: "di-violation",
+};
 
 const toUnique = <T extends string>(values: T[]): T[] => {
   return Array.from(new Set(values));
@@ -128,12 +141,22 @@ const applyRuleOverrides = (issues: Issue[], configRules?: Record<string, RuleCo
       return issue;
     }
 
-    return {
-      ...issue,
-      ...(override.severity ? { severity: override.severity } : {}),
-      ...(typeof override.confidence === "number" ? { confidence: override.confidence } : {}),
-      ...(override.remediation ? { remediation: override.remediation } : {}),
-    };
+    const nextIssue: Issue = { ...issue };
+    if (override.severity) {
+      nextIssue.severity = override.severity;
+    }
+    if (typeof override.confidence === "number") {
+      nextIssue.confidence = override.confidence;
+    }
+    if (override.remediation) {
+      nextIssue.remediation = override.remediation;
+      nextIssue.metadata = {
+        ...(issue.metadata ?? {}),
+        remediation: override.remediation,
+      };
+    }
+
+    return nextIssue;
   });
 };
 
@@ -222,6 +245,49 @@ const applySuppressions = (issues: Issue[], suppressions?: SuppressionConfig[]):
   });
 };
 
+const toFindingRuleId = (issue: Issue): string => {
+  const mappedFromRuleId = FINDING_RULE_ID_BY_RULE_ID[issue.ruleId];
+  if (mappedFromRuleId) {
+    return mappedFromRuleId;
+  }
+
+  if (issue.id) {
+    const mappedFromIssueId = FINDING_RULE_ID_BY_RULE_ID[issue.id];
+    if (mappedFromIssueId) {
+      return mappedFromIssueId;
+    }
+  }
+
+  return issue.ruleId;
+};
+
+const toFindingId = (issue: Issue, index: number): string => {
+  if (issue.id && issue.id.length > 0) {
+    return issue.id;
+  }
+
+  if (issue.ruleId.length > 0) {
+    return issue.ruleId;
+  }
+
+  return `DGGEN${String(index + 1).padStart(3, "0")}`;
+};
+
+const toFindingMetadata = (issue: Issue, findingRuleId: string): IssueMetadata => {
+  const remediation = issue.metadata?.remediation ?? issue.remediation;
+  if (issue.severity !== "error") {
+    return { remediation };
+  }
+
+  return {
+    blockingReason:
+      issue.metadata?.blockingReason ??
+      BLOCKING_REASON_BY_FINDING_RULE_ID[findingRuleId] ??
+      "error-threshold",
+    remediation,
+  };
+};
+
 export interface ReviewEngineOptions {
   workspaceRoot?: string;
   sourceFilePaths?: string[];
@@ -280,10 +346,52 @@ export const reviewDiff = async (
   const overriddenIssues = applyRuleOverrides(rawIssues, effectiveConfig.rules);
   const issues = applySuppressions(overriddenIssues, effectiveConfig.suppressions);
 
+  const levelCounts: Record<Severity, number> = issues.reduce<Record<Severity, number>>(
+    (acc, issue) => {
+      acc[issue.severity] += 1;
+      return acc;
+    },
+    { error: 0, warn: 0, info: 0 },
+  );
+
+  const findings: Finding[] = issues.map((issue, index) => {
+    const findingRuleId = toFindingRuleId(issue);
+    return {
+      id: toFindingId(issue, index),
+      level: issue.severity,
+      message: issue.message,
+      file: issue.file,
+      line: issue.line,
+      ruleId: findingRuleId,
+      metadata: toFindingMetadata(issue, findingRuleId),
+    };
+  });
+  const blocking = isBlocking(issues);
+  if (
+    blocking &&
+    !findings.some((finding) => finding.level === "error" && finding.metadata.blockingReason)
+  ) {
+    const firstErrorIndex = findings.findIndex((finding) => finding.level === "error");
+    if (firstErrorIndex >= 0) {
+      const firstError = findings[firstErrorIndex];
+      if (firstError) {
+        findings[firstErrorIndex] = {
+          ...firstError,
+          metadata: {
+            ...firstError.metadata,
+            blockingReason: "error-threshold",
+          },
+        };
+      }
+    }
+  }
+
   const result: ReviewResult = {
     schemaVersion: REVIEW_SCHEMA_VERSION,
     risk: computeRisk(issues),
-    blocking: isBlocking(issues),
+    blocking,
+    levelCounts,
+    findings,
     issues,
   };
 

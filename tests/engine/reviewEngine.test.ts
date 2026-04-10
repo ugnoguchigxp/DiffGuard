@@ -56,6 +56,11 @@ describe("reviewDiff", () => {
 
       expect(result.risk).toBe("high");
       expect(result.blocking).toBe(true);
+      expect(result.levelCounts.error).toBeGreaterThanOrEqual(1);
+      expect(result.findings[0]?.id).toBe("DG001");
+      expect(result.findings[0]?.level).toBe("error");
+      expect(result.findings[0]?.ruleId).toBe("API_BREAK");
+      expect(result.findings[0]?.metadata.blockingReason).toBe("api-compatibility");
       expect(result.issues[0]?.type).toBe("missing-update");
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
@@ -94,7 +99,55 @@ describe("reviewDiff", () => {
 
       expect(result.risk).toBe("medium");
       expect(result.blocking).toBe(false);
+      expect(result.levelCounts.warn).toBeGreaterThanOrEqual(1);
+      expect(result.findings.some((f) => f.ruleId === "UNUSED_IMPORT")).toBe(true);
       expect(result.issues[0]?.type).toBe("unused-import");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("provides remediation hint in metadata", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const controllerPath = path.join(workspaceRoot, "src/userController.ts");
+      await writeFile(
+        controllerPath,
+        [
+          "export class UserController {",
+          "  run() {",
+          "    const repo = new UserRepository();",
+          "    return repo.find();",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const diff = [
+        "diff --git a/src/userController.ts b/src/userController.ts",
+        "--- a/src/userController.ts",
+        "+++ b/src/userController.ts",
+        "@@ -1,1 +1,2 @@",
+        "+const repo = new UserRepository();",
+      ].join("\n");
+
+      const result = await reviewDiff(
+        {
+          diff,
+          files: ["src/userController.ts"],
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [controllerPath],
+        },
+      );
+
+      const diIssue = result.findings.find((f) => f.ruleId === "DI_VIOLATION");
+      expect(diIssue).toBeDefined();
+      expect(diIssue?.metadata.remediation).toContain("constructor injection");
+      expect(diIssue?.metadata.blockingReason).toBe("di-violation");
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }
@@ -348,6 +401,53 @@ describe("reviewDiff", () => {
     }
   });
 
+  it("adds fallback blocking reason when override promotes warning to error", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const taskPath = path.join(workspaceRoot, "src/task.ts");
+      await writeFile(
+        taskPath,
+        ['import { unusedHelper } from "./util";', "export const value = 1;", ""].join("\n"),
+      );
+
+      const diff = [
+        "diff --git a/src/task.ts b/src/task.ts",
+        "--- a/src/task.ts",
+        "+++ b/src/task.ts",
+        "@@ -1,1 +1,2 @@",
+        '+import { unusedHelper } from "./util";',
+        " export const value = 1;",
+      ].join("\n");
+
+      const result = await reviewDiff(
+        {
+          diff,
+          files: ["src/task.ts"],
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [taskPath],
+          config: {
+            rules: {
+              DG003: {
+                severity: "error",
+              },
+            },
+          },
+        },
+      );
+
+      const finding = result.findings.find((item) => item.ruleId === "UNUSED_IMPORT");
+      expect(result.blocking).toBe(true);
+      expect(finding?.level).toBe("error");
+      expect(finding?.metadata.blockingReason).toBe("error-threshold");
+      expect(result.issues[0]?.ruleId).toBe("DG003");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("supports suppressions and rule disable", async () => {
     const workspaceRoot = await createTempWorkspace();
 
@@ -517,6 +617,7 @@ describe("reviewDiff", () => {
         id: "PLG001",
         run: () => [
           {
+            id: "PLG001",
             type: "plugin-finding",
             ruleId: "PLG001",
             message: "plugin issue",
@@ -619,6 +720,7 @@ describe("reviewDiff", () => {
         id: "PLG002",
         run: () => [
           {
+            id: "PLG002",
             type: "plugin-finding",
             ruleId: "PLG002",
             message: "plugin issue",
@@ -642,6 +744,52 @@ describe("reviewDiff", () => {
       );
 
       expect(result.issues.some((issue) => issue.ruleId === "PLG002")).toBe(true);
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps plugin compatibility when issue id is omitted", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const sourcePath = path.join(workspaceRoot, "src/plugin.ts");
+      await writeFile(sourcePath, "export const value = 1;\n");
+      const diff = [
+        "diff --git a/src/plugin.ts b/src/plugin.ts",
+        "--- a/src/plugin.ts",
+        "+++ b/src/plugin.ts",
+        "@@ -1,1 +1,1 @@",
+        "-export const value = 0;",
+        "+export const value = 1;",
+      ].join("\n");
+
+      const pluginRule: Rule = {
+        id: "PLG003",
+        run: () => [
+          {
+            type: "plugin-finding",
+            ruleId: "PLG003",
+            message: "plugin issue without explicit id",
+            severity: "warn",
+            confidence: 0.4,
+            remediation: "review plugin finding",
+          },
+        ],
+      };
+
+      const result = await reviewDiff(
+        { diff, files: ["src/plugin.ts"] },
+        {
+          workspaceRoot,
+          sourceFilePaths: [sourcePath],
+          pluginRules: [pluginRule],
+        },
+      );
+
+      expect(result.issues[0]?.ruleId).toBe("PLG003");
+      expect(result.findings[0]?.id).toBe("PLG003");
+      expect(result.findings[0]?.metadata.remediation).toBe("review plugin finding");
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }

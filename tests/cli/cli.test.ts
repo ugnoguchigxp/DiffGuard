@@ -80,6 +80,8 @@ describe("runCli", () => {
           schemaVersion: REVIEW_SCHEMA_VERSION,
           risk: "low",
           blocking: false,
+          levelCounts: { error: 0, warn: 0, info: 0 },
+          findings: [],
           issues: [],
         };
       },
@@ -142,6 +144,8 @@ describe("runCli", () => {
           schemaVersion: REVIEW_SCHEMA_VERSION,
           risk: "low",
           blocking: false,
+          levelCounts: { error: 0, warn: 0, info: 0 },
+          findings: [],
           issues: [],
           llm: {
             summary: "ok",
@@ -178,6 +182,8 @@ describe("runCli", () => {
         schemaVersion: REVIEW_SCHEMA_VERSION,
         risk: "medium",
         blocking: false,
+        levelCounts: { error: 0, warn: 1, info: 0 },
+        findings: [],
         issues: [
           {
             type: "unused-import",
@@ -221,6 +227,8 @@ describe("runCli", () => {
         schemaVersion: REVIEW_SCHEMA_VERSION,
         risk: "medium",
         blocking: false,
+        levelCounts: { error: 0, warn: 1, info: 0 },
+        findings: [],
         issues: [
           {
             type: "unused-import",
@@ -265,6 +273,8 @@ describe("runCli", () => {
             schemaVersion: REVIEW_SCHEMA_VERSION,
             risk: "low",
             blocking: false,
+            levelCounts: { error: 0, warn: 0, info: 0 },
+            findings: [],
             issues: [],
           },
         ];
@@ -341,6 +351,8 @@ describe("runCli", () => {
         schemaVersion: REVIEW_SCHEMA_VERSION,
         risk: "medium",
         blocking: false,
+        levelCounts: { error: 0, warn: 1, info: 0 },
+        findings: [],
         issues: [
           {
             type: "unused-import",
@@ -391,6 +403,8 @@ describe("runCli", () => {
             schemaVersion: REVIEW_SCHEMA_VERSION,
             risk: "low",
             blocking: false,
+            levelCounts: { error: 0, warn: 0, info: 0 },
+            findings: [],
             issues: [],
           };
         },
@@ -430,6 +444,8 @@ describe("runCli", () => {
             schemaVersion: REVIEW_SCHEMA_VERSION,
             risk: "low",
             blocking: false,
+            levelCounts: { error: 0, warn: 0, info: 0 },
+            findings: [],
             issues: [],
           };
         },
