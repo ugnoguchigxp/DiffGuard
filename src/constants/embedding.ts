@@ -1,0 +1,2 @@
+export const DEFAULT_RELATED_CODE_LIMIT = 3;
+export const MIN_RELATED_CODE_SCORE = 0.1;
