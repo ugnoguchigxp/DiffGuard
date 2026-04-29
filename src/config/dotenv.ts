@@ -41,6 +41,7 @@ export const parseDotEnv = (text: string): Record<string, string> => {
 export const loadDotEnvFile = async (
   workspaceRoot: string,
   fileName = ".env",
+  options: { mutateProcessEnv?: boolean } = {},
 ): Promise<Record<string, string>> => {
   const envPath = path.resolve(workspaceRoot, fileName);
 
@@ -48,9 +49,11 @@ export const loadDotEnvFile = async (
     const text = await readFile(envPath, "utf8");
     const parsed = parseDotEnv(text);
 
-    for (const [key, value] of Object.entries(parsed)) {
-      if (process.env[key] === undefined) {
-        process.env[key] = value;
+    if (options.mutateProcessEnv ?? true) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (process.env[key] === undefined) {
+          process.env[key] = value;
+        }
       }
     }
 

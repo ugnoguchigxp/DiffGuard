@@ -98,4 +98,20 @@ describe("resolveLlmRuntimeSettings", () => {
       }
     }
   });
+
+  it("can resolve settings from an explicit env map", () => {
+    const settings = resolveLlmRuntimeSettings({}, false, {
+      DIFFGUARD_ENABLE_LLM: "true",
+      DIFFGUARD_LLM_MODE: "local-openai-api",
+      DIFFGUARD_LOCAL_LLM_API_BASE_URL: "http://localhost:44448/v1",
+      DIFFGUARD_LOCAL_LLM_MODEL: "custom-local-model",
+      DIFFGUARD_LOCAL_LLM_MAX_TOKENS: "128",
+    });
+
+    expect(settings.enabled).toBe(true);
+    expect(settings.mode).toBe("local-openai-api");
+    expect(settings.apiBaseUrl).toBe("http://localhost:44448/v1");
+    expect(settings.model).toBe("custom-local-model");
+    expect(settings.maxTokens).toBe(128);
+  });
 });

@@ -3,6 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp/service": {
+      "types": "./dist/mcp/service.d.ts",
+      "default": "./dist/mcp/service.js"
+    }
+  },
   "packageManager": "pnpm@10.24.0",
   "engines": {
     "bun": ">=1.2.0"
@@ -12,7 +22,7 @@
     "diffguard-mcp": "./dist/mcp/server.js"
   },
   "scripts": {
-    "build": "bunx tsc -p tsconfig.json",
+    "build": "rm -rf dist && bunx tsc -p tsconfig.build.json && bun scripts/fix-esm-imports.ts dist",
     "cli": "PATH=\"$HOME/.bun/bin:$PATH\" bun run src/cli.ts",
     "mcp": "PATH=\"$HOME/.bun/bin:$PATH\" bun run src/mcp/server.ts",
     "typecheck": "bunx tsc -p tsconfig.json --noEmit",

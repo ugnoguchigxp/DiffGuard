@@ -50,4 +50,25 @@ describe("dotenv", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("can load .env without mutating process.env", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "diffguard-dotenv-"));
+    const envPath = path.join(root, ".env");
+
+    const prevMode = process.env.DIFFGUARD_LLM_MODE;
+    delete process.env.DIFFGUARD_LLM_MODE;
+
+    try {
+      await writeFile(envPath, "DIFFGUARD_LLM_MODE=local-openai-api\n");
+      const parsed = await loadDotEnvFile(root, ".env", { mutateProcessEnv: false });
+
+      expect(parsed.DIFFGUARD_LLM_MODE).toBe("local-openai-api");
+      expect(process.env.DIFFGUARD_LLM_MODE).toBeUndefined();
+    } finally {
+      if (prevMode !== undefined) {
+        process.env.DIFFGUARD_LLM_MODE = prevMode;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -2,6 +2,8 @@ import { DEFAULT_GEMMA_COMMAND, DEFAULT_GEMMA_TIMEOUT_MS } from "../constants/ll
 
 import type { DiffGuardConfig, LlmMode } from "../types";
 
+type RuntimeEnv = Record<string, string | undefined>;
+
 const toBoolean = (value: string | undefined): boolean | undefined => {
   if (!value) {
     return undefined;
@@ -73,47 +75,43 @@ export interface LlmRuntimeSettings {
 export const resolveLlmRuntimeSettings = (
   config: DiffGuardConfig,
   cliEnableLlmFlag: boolean,
+  env: RuntimeEnv = process.env,
 ): LlmRuntimeSettings => {
-  const envEnabled = toBoolean(process.env.DIFFGUARD_ENABLE_LLM);
+  const envEnabled = toBoolean(env.DIFFGUARD_ENABLE_LLM);
   const configEnabled = config.llm?.enabled;
   const enabled = cliEnableLlmFlag ? true : (configEnabled ?? envEnabled ?? false);
 
-  const envMode = toLlmMode(process.env.DIFFGUARD_LLM_MODE);
+  const envMode = toLlmMode(env.DIFFGUARD_LLM_MODE);
   const configMode = config.llm?.mode;
   const mode = configMode ?? envMode ?? "gemma-command";
 
   const command =
-    config.llm?.command ??
-    process.env.DIFFGUARD_LLM_COMMAND ??
-    process.env.GEMMA4_COMMAND ??
-    DEFAULT_GEMMA_COMMAND;
+    config.llm?.command ?? env.DIFFGUARD_LLM_COMMAND ?? env.GEMMA4_COMMAND ?? DEFAULT_GEMMA_COMMAND;
 
   const timeoutMs =
     config.llm?.timeoutMs ??
-    toPositiveNumber(process.env.DIFFGUARD_LLM_TIMEOUT_MS) ??
+    toPositiveNumber(env.DIFFGUARD_LLM_TIMEOUT_MS) ??
     DEFAULT_GEMMA_TIMEOUT_MS;
 
-  const sessionDir = config.llm?.sessionDir ?? process.env.DIFFGUARD_LLM_SESSION_DIR;
-  const noSession =
-    config.llm?.noSession ?? toBoolean(process.env.DIFFGUARD_LLM_NO_SESSION) ?? false;
+  const sessionDir = config.llm?.sessionDir ?? env.DIFFGUARD_LLM_SESSION_DIR;
+  const noSession = config.llm?.noSession ?? toBoolean(env.DIFFGUARD_LLM_NO_SESSION) ?? false;
 
   const apiBaseUrl =
     config.llm?.apiBaseUrl ??
-    process.env.DIFFGUARD_LOCAL_LLM_API_BASE_URL ??
-    process.env.LOCAL_LLM_BASE_URL ??
+    env.DIFFGUARD_LOCAL_LLM_API_BASE_URL ??
+    env.LOCAL_LLM_BASE_URL ??
     "http://127.0.0.1:44448/v1";
 
   const model =
     config.llm?.model ??
-    process.env.DIFFGUARD_LOCAL_LLM_MODEL ??
-    process.env.GEMMA4_API_MODEL_ID ??
+    env.DIFFGUARD_LOCAL_LLM_MODEL ??
+    env.GEMMA4_API_MODEL_ID ??
     "gemma-4-e4b-it";
 
   const maxTokens =
-    config.llm?.maxTokens ?? toPositiveNumber(process.env.DIFFGUARD_LOCAL_LLM_MAX_TOKENS) ?? 256;
+    config.llm?.maxTokens ?? toPositiveNumber(env.DIFFGUARD_LOCAL_LLM_MAX_TOKENS) ?? 256;
 
-  const temperature =
-    config.llm?.temperature ?? toNumber(process.env.DIFFGUARD_LOCAL_LLM_TEMPERATURE) ?? 0;
+  const temperature = config.llm?.temperature ?? toNumber(env.DIFFGUARD_LOCAL_LLM_TEMPERATURE) ?? 0;
 
   return {
     enabled,

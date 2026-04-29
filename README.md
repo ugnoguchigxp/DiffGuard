@@ -68,9 +68,28 @@ diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]
 
 ## MCP（IDE 連携）
 
-DiffGuard の機能を IDE から呼び出すための MCP サーバーを同梱しています（stdio）。
+DiffGuard の MCP ツールは、共有ローカル MCP ホストから in-process に読み込める
+transport-free サービスとして公開しています。Codex などの常用環境では共有ホスト側
+から `diffguard/mcp/service` またはビルド後の `dist/mcp/service.js` を import して
+利用してください。
 
-起動:
+ホスト向け import:
+
+```ts
+import { createDiffGuardMcpService } from "diffguard/mcp/service";
+
+const service = createDiffGuardMcpService();
+await service.callTool("review_diff", {
+  diff,
+  files: ["src/example.ts"],
+  workspaceRoot: "/absolute/path/to/workspace",
+});
+```
+
+`review_diff` / `review_batch` は設定ファイル、プラグイン、ソースファイル解決の基準と
+して `workspaceRoot` を使います。共有ホストから呼ぶ場合は明示的に渡してください。
+
+直接 stdio 起動は開発時のデバッグ用 fallback として残しています。
 
 ```bash
 pnpm mcp
@@ -82,7 +101,7 @@ pnpm mcp
 - `review_diff`: 単一 diff をレビューして JSON または SARIF を返す
 - `review_batch`: 複数 diff をまとめてレビューする
 
-IDE 側設定例（MCP クライアント共通の command/args 形式）:
+直接 stdio fallback の IDE 側設定例（MCP クライアント共通の command/args 形式）:
 
 ```json
 {
@@ -114,6 +133,7 @@ IDE 側設定例（MCP クライアント共通の command/args 形式）:
 補足:
 
 - `node` で直接起動する場合は `command: "node"` と `args: ["/absolute/path/to/diffGuard/dist/mcp/server.js"]`
+- この直接起動は長期運用経路ではなく、共有ホスト移行後の通常利用では不要
 - 設定変更後、反映されない場合は Cursor を再起動
 
 ### GitHub Copilot CLI での登録
