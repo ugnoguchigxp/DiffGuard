@@ -7,7 +7,13 @@ import { loadDotEnvFile } from "./config/dotenv";
 import { resolveLlmRuntimeSettings } from "./config/llmRuntime";
 import { loadDiffGuardConfig } from "./config/loader";
 import { DEFAULT_FAIL_ON, DEFAULT_OUTPUT_FORMAT, REVIEW_SCHEMA_VERSION } from "./constants/review";
-import { reviewBatch, reviewDiff } from "./engine/reviewEngine";
+import {
+  mergeReviewRequestContext,
+  mergeReviewRequestContexts,
+  parseAstmendOperations,
+  parseReviewRequestContext,
+} from "./context/requestContext";
+import { reviewBatch, reviewBatchCandidates, reviewDiff } from "./engine/reviewEngine";
 import { reviewWithGemma } from "./llm/gemmaClient";
 import { reviewWithLocalOpenAi } from "./llm/localOpenAiClient";
 import { toSarif } from "./output/sarif";
@@ -17,7 +23,9 @@ import type {
   DiffAnalysis,
   DiffGuardConfig,
   LlmReview,
+  ReviewBatchResult,
   ReviewInput,
+  ReviewRequestContext,
   ReviewResult,
   Rule,
 } from "./types";
@@ -35,10 +43,14 @@ const USAGE_TEXT = [
   "  --diff-file <path>           Read unified diff from a file",
   "  --diff <text>                Read unified diff from an argument",
   "  --batch-file <path>          Read batch input JSON",
+  "  --compare-candidates        Add batchSummary with recommended candidate",
   "  --files <csv>                Comma separated source file paths",
   "  --file <path>                Single source file path (repeatable)",
   "  --workspace-root <path>      Workspace root for source resolution",
   "  --enable-llm                 Force-enable local LLM review",
+  "  --context-file <path>        Read review request context JSON",
+  "  --astmend-ops-file <path>    Read Astmend operation metadata JSON array",
+  "  --emit-memory-hints          Include Gnosis-ready memory hint payloads",
   "  --llm-related-code-file <p>  Related code text for LLM prompt",
   "  --config <path>              Load diffguard.config from explicit path",
   "  --plugin <path>              Additional plugin module path (repeatable)",
@@ -56,6 +68,10 @@ interface CliArgs {
   files: string[];
   workspaceRoot?: string;
   enableLlm: boolean;
+  emitMemoryHints: boolean;
+  compareCandidates: boolean;
+  contextFile?: string;
+  astmendOpsFile?: string;
   llmRelatedCodeFile?: string;
   configFile?: string;
   plugins: string[];
@@ -83,6 +99,7 @@ interface CliDependencies {
       llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
       config?: DiffGuardConfig;
       pluginRules?: Rule[];
+      emitMemoryHints?: boolean;
     },
   ) => Promise<ReviewResult>;
   reviewBatchFn: (
@@ -94,8 +111,21 @@ interface CliDependencies {
       llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
       config?: DiffGuardConfig;
       pluginRules?: Rule[];
+      emitMemoryHints?: boolean;
     },
   ) => Promise<ReviewResult[]>;
+  reviewBatchCandidatesFn: (
+    inputs: ReviewInput[],
+    options?: {
+      workspaceRoot?: string;
+      enableLlm?: boolean;
+      llmRelatedCode?: string;
+      llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
+      config?: DiffGuardConfig;
+      pluginRules?: Rule[];
+      emitMemoryHints?: boolean;
+    },
+  ) => Promise<ReviewBatchResult>;
   loadConfigFn: (
     workspaceRoot: string,
     explicitConfigPath?: string,
@@ -135,6 +165,7 @@ const createDefaultDependencies = (): CliDependencies => {
     analyzeDiffFn: analyzeDiff,
     reviewDiffFn: reviewDiff,
     reviewBatchFn: reviewBatch,
+    reviewBatchCandidatesFn: reviewBatchCandidates,
     loadConfigFn: loadDiffGuardConfig,
     loadPluginRulesFn: loadPluginRules,
     toSarifFn: toSarif,
@@ -178,6 +209,8 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
     help: false,
     files: [],
     enableLlm: false,
+    emitMemoryHints: false,
+    compareCandidates: false,
     plugins: [],
     pretty: false,
   };
@@ -191,6 +224,16 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
 
     if (arg === "--enable-llm") {
       result.enableLlm = true;
+      continue;
+    }
+
+    if (arg === "--emit-memory-hints") {
+      result.emitMemoryHints = true;
+      continue;
+    }
+
+    if (arg === "--compare-candidates") {
+      result.compareCandidates = true;
       continue;
     }
 
@@ -231,6 +274,18 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
 
     if (arg === "--workspace-root") {
       result.workspaceRoot = requireNextValue(argv, index, "--workspace-root");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--context-file") {
+      result.contextFile = requireNextValue(argv, index, "--context-file");
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--astmend-ops-file") {
+      result.astmendOpsFile = requireNextValue(argv, index, "--astmend-ops-file");
       index += 1;
       continue;
     }
@@ -360,6 +415,29 @@ const parseBatchInput = (raw: string): ReviewInput[] => {
   throw new Error("Batch input must be an array of review inputs or an object with { items: [] }.");
 };
 
+const readReviewRequestContext = async (
+  args: CliArgs,
+  dependencies: CliDependencies,
+): Promise<ReviewRequestContext | undefined> => {
+  const context = args.contextFile
+    ? parseReviewRequestContext(JSON.parse(await dependencies.readTextFile(args.contextFile)))
+    : undefined;
+  const astmendOperations = args.astmendOpsFile
+    ? parseAstmendOperations(JSON.parse(await dependencies.readTextFile(args.astmendOpsFile)))
+    : [];
+
+  return mergeReviewRequestContext(context, astmendOperations);
+};
+
+const mergeInputContext = (input: ReviewInput, context?: ReviewRequestContext): ReviewInput => {
+  const nextContext = mergeReviewRequestContexts(context, input.context);
+
+  return {
+    ...input,
+    ...(nextContext ? { context: nextContext } : {}),
+  };
+};
+
 const renderOutput = (
   format: "json" | "sarif",
   pretty: boolean,
@@ -378,6 +456,21 @@ const renderOutput = (
   }
 
   return `${JSON.stringify({ schemaVersion: REVIEW_SCHEMA_VERSION, results }, null, spacing)}\n`;
+};
+
+const renderBatchResultOutput = (
+  format: "json" | "sarif",
+  pretty: boolean,
+  result: ReviewBatchResult,
+  dependencies: CliDependencies,
+): string => {
+  if (format === "sarif") {
+    const spacing = pretty ? 2 : 0;
+    return `${JSON.stringify(dependencies.toSarifFn(result.results), null, spacing)}\n`;
+  }
+
+  const spacing = pretty ? 2 : 0;
+  return `${JSON.stringify(result, null, spacing)}\n`;
 };
 
 export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<number> => {
@@ -419,6 +512,7 @@ export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<
     const llmRelatedCode = args.llmRelatedCodeFile
       ? await dependencies.readTextFile(args.llmRelatedCodeFile)
       : undefined;
+    const requestContext = await readReviewRequestContext(args, dependencies);
 
     const pluginRules = effectiveConfig.plugins
       ? await dependencies.loadPluginRulesFn(effectiveConfig.plugins, workspaceRoot)
@@ -431,11 +525,22 @@ export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<
       ...(llmRelatedCode ? { llmRelatedCode } : {}),
       config: effectiveConfig,
       pluginRules,
+      emitMemoryHints: args.emitMemoryHints,
     };
 
     if (args.batchFile) {
       const raw = await dependencies.readTextFile(args.batchFile);
-      const batchInputs = parseBatchInput(raw);
+      const batchInputs = parseBatchInput(raw).map((input) =>
+        mergeInputContext(input, requestContext),
+      );
+      if (args.compareCandidates) {
+        const result = await dependencies.reviewBatchCandidatesFn(batchInputs, reviewOptions);
+        dependencies.stdoutWrite(
+          renderBatchResultOutput(format, args.pretty, result, dependencies),
+        );
+        return determineExitCode(result.results, failOn);
+      }
+
       const results = await dependencies.reviewBatchFn(batchInputs, reviewOptions);
 
       dependencies.stdoutWrite(renderOutput(format, args.pretty, results, dependencies, true));
@@ -469,6 +574,7 @@ export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<
       {
         diff,
         files,
+        ...(requestContext ? { context: requestContext } : {}),
       },
       {
         ...reviewOptions,

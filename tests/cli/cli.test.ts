@@ -13,6 +13,12 @@ describe("parseCliArgs", () => {
       "--file",
       "src/c.ts",
       "--enable-llm",
+      "--emit-memory-hints",
+      "--compare-candidates",
+      "--context-file",
+      "/tmp/context.json",
+      "--astmend-ops-file",
+      "/tmp/ops.json",
       "--pretty",
       "--format",
       "sarif",
@@ -22,6 +28,10 @@ describe("parseCliArgs", () => {
 
     expect(args.files).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
     expect(args.enableLlm).toBe(true);
+    expect(args.emitMemoryHints).toBe(true);
+    expect(args.compareCandidates).toBe(true);
+    expect(args.contextFile).toBe("/tmp/context.json");
+    expect(args.astmendOpsFile).toBe("/tmp/ops.json");
     expect(args.pretty).toBe(true);
     expect(args.format).toBe("sarif");
     expect(args.failOn).toBe("warn");
@@ -160,6 +170,84 @@ describe("runCli", () => {
     expect(relatedCode).toBe("export const related = true;");
   });
 
+  it("reads context and Astmend operations from files", async () => {
+    let reviewInputContext: unknown;
+    let emitMemoryHints = false;
+
+    const code = await runCli({
+      argv: [
+        "--diff",
+        [
+          "diff --git a/src/service.ts b/src/service.ts",
+          "--- a/src/service.ts",
+          "+++ b/src/service.ts",
+          "@@ -1,1 +1,1 @@",
+          "-export const value = 0;",
+          "+export const value = 1;",
+        ].join("\n"),
+        "--file",
+        "src/service.ts",
+        "--context-file",
+        "/tmp/context.json",
+        "--astmend-ops-file",
+        "/tmp/ops.json",
+        "--emit-memory-hints",
+      ],
+      readTextFile: async (filePath) => {
+        if (filePath === "/tmp/context.json") {
+          return JSON.stringify({
+            source: "astmend",
+            proposalId: "proposal-1",
+            astmendOperations: [
+              {
+                operationId: "op-1",
+                type: "rename_symbol",
+                file: "src/service.ts",
+              },
+            ],
+          });
+        }
+        if (filePath === "/tmp/ops.json") {
+          return JSON.stringify([
+            {
+              operationId: "op-2",
+              type: "replace_node",
+              file: "src/service.ts",
+            },
+          ]);
+        }
+        return "";
+      },
+      stdoutWrite: () => {},
+      stderrWrite: () => {},
+      reviewDiffFn: async (input, options) => {
+        reviewInputContext = input.context;
+        emitMemoryHints = options?.emitMemoryHints ?? false;
+        return {
+          schemaVersion: REVIEW_SCHEMA_VERSION,
+          risk: "low",
+          blocking: false,
+          levelCounts: { error: 0, warn: 0, info: 0 },
+          findings: [],
+          issues: [],
+          context: {
+            proposalId: "proposal-1",
+            operationIds: ["op-1", "op-2"],
+          },
+        };
+      },
+      ...baseConfigOverride,
+    });
+
+    expect(code).toBe(0);
+    expect(emitMemoryHints).toBe(true);
+    expect(reviewInputContext).toMatchObject({
+      schemaVersion: REVIEW_SCHEMA_VERSION,
+      proposalId: "proposal-1",
+      astmendOperations: [{ operationId: "op-1" }, { operationId: "op-2" }],
+    });
+  });
+
   it("returns exit code 2 with --fail-on warn", async () => {
     const code = await runCli({
       argv: [
@@ -288,6 +376,66 @@ describe("runCli", () => {
 
     expect(code).toBe(0);
     expect(stdout).toContain('"results"');
+  });
+
+  it("supports batch candidate comparison output", async () => {
+    let stdout = "";
+
+    const code = await runCli({
+      argv: ["--batch-file", "/tmp/batch.json", "--compare-candidates", "--pretty"],
+      readTextFile: async (filePath) => {
+        if (filePath === "/tmp/batch.json") {
+          return JSON.stringify([
+            {
+              candidateId: "safe",
+              diff: "diff --git a/src/a.ts b/src/a.ts",
+              files: ["src/a.ts"],
+            },
+          ]);
+        }
+        return "";
+      },
+      reviewBatchCandidatesFn: async (inputs) => {
+        expect(inputs[0]?.candidateId).toBe("safe");
+        return {
+          schemaVersion: REVIEW_SCHEMA_VERSION,
+          results: [
+            {
+              schemaVersion: REVIEW_SCHEMA_VERSION,
+              risk: "low",
+              blocking: false,
+              levelCounts: { error: 0, warn: 0, info: 0 },
+              findings: [],
+              issues: [],
+            },
+          ],
+          batchSummary: {
+            recommendedCandidateId: "safe",
+            reasons: ["safe has the lowest risk score"],
+            scores: [
+              {
+                candidateId: "safe",
+                index: 0,
+                score: 0,
+                blocking: false,
+                errors: 0,
+                warnings: 0,
+                infos: 0,
+              },
+            ],
+          },
+        };
+      },
+      stdoutWrite: (value) => {
+        stdout += value;
+      },
+      stderrWrite: () => {},
+      ...baseConfigOverride,
+    });
+
+    expect(code).toBe(0);
+    expect(stdout).toContain('"batchSummary"');
+    expect(stdout).toContain('"recommendedCandidateId": "safe"');
   });
 
   it("returns parse error for unknown option", async () => {

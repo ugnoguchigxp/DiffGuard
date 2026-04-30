@@ -36,6 +36,10 @@ DiffGuard は、`Astmend` が生成した差分を解析し、影響範囲とリ
 - `DG002` `interface-impact`: interface 変更の未追従利用
 - `DG003` `unused-import`: 追加 import の未使用
 - `DG004` `di-violation`: Controller での `new *Repository` 直接生成
+- `DG_CONV_001` `do-not-extract-violation`: `doNotExtract` 指定ロジックの shared/common 抽出違反
+- `DG_SEM_001` `semantic-api-impact`: opt-in semantic checker による公開 API 影響
+- `DG_REACT_001` `react-hook-conditional`: opt-in React rule pack による条件分岐内 Hook 呼び出し
+- `DG_QUERY_001` `tanstack-query-key-mismatch`: opt-in TanStack Query rule pack による `queryKey` / `queryFn` 不整合
 
 ## セットアップ
 
@@ -63,8 +67,40 @@ diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]
 - `--fail-on <none|warn|error>`: 該当 severity で終了コード `2`
 - `--format <json|sarif>`: 出力形式
 - `--enable-llm`: LLM レビューを強制有効化（`.env` / config での有効化より優先）
+- `--context-file <path>`: proposal ID / intent / `doNotExtract` などのレビュー context JSON
+- `--astmend-ops-file <path>`: Astmend operation metadata の JSON 配列
+- `--emit-memory-hints`: blocking finding から Gnosis 登録向け `memoryHints` を出力
+- `--compare-candidates`: batch 実行時に `batchSummary.recommendedCandidateId` を出力
 - `--llm-related-code-file <path>`: LLM に渡す関連コード
 - `--pretty`: 整形出力
+
+context JSON 例:
+
+```json
+{
+  "source": "astmend",
+  "proposalId": "proposal-1",
+  "patchPlanId": "plan-1",
+  "intent": "extract",
+  "constraints": {
+    "doNotExtract": ["validatePrice"]
+  }
+}
+```
+
+Astmend operation metadata 例:
+
+```json
+[
+  {
+    "operationId": "op-1",
+    "type": "extract_function",
+    "file": "src/features/pricing.ts",
+    "symbol": "validatePrice",
+    "destinationFile": "src/shared/pricing.ts"
+  }
+]
+```
 
 ## MCP（IDE 連携）
 
@@ -83,6 +119,22 @@ await service.callTool("review_diff", {
   diff,
   files: ["src/example.ts"],
   workspaceRoot: "/absolute/path/to/workspace",
+  context: {
+    source: "astmend",
+    proposalId: "proposal-1",
+    constraints: {
+      doNotExtract: ["validatePrice"]
+    }
+  },
+  astmendOperations: [
+    {
+      operationId: "op-1",
+      type: "extract_function",
+      file: "src/features/pricing.ts",
+      destinationFile: "src/shared/pricing.ts"
+    }
+  ],
+  emitMemoryHints: true
 });
 ```
 
@@ -260,6 +312,26 @@ cd ../localLlm
   }
 }
 ```
+
+## Opt-in 解析
+
+semantic checker と framework rule pack は default off です。必要な repo だけ `diffguard.config.*` で有効化します。
+
+```json
+{
+  "semantic": {
+    "enabled": true,
+    "maxFiles": 200,
+    "timeoutMs": 3000
+  },
+  "frameworkRules": {
+    "react": true,
+    "tanstackQuery": true
+  }
+}
+```
+
+semantic checker は `workspaceRoot` と `sourceFilePaths` を使い、exported function/class/interface/type の削除・シグネチャ変更に外部参照が残っていないかを確認します。framework rule pack は React / TanStack Query の明らかな差分パターンだけを対象にします。
 
 ## Astmend 連携
 

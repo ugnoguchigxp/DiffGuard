@@ -1,5 +1,10 @@
 export { analyzeDiff } from "./analyzer/diffAnalyzer";
-export { reviewBatch, reviewDiff } from "./engine/reviewEngine";
+export {
+  buildMemoryHints,
+  reviewBatch,
+  reviewBatchCandidates,
+  reviewDiff,
+} from "./engine/reviewEngine";
 export type {
   DiffGuardMcpService,
   DiffGuardMcpServiceOptions,
@@ -8,9 +13,17 @@ export type {
 } from "./mcp/service";
 export { createDiffGuardMcpService } from "./mcp/service";
 export type {
+  AstmendOperationMetadata,
   DiffAnalysis,
   DiffGuardConfig,
+  GnosisMemoryHint,
+  ReviewBatchCandidateScore,
+  ReviewBatchResult,
+  ReviewBatchSummary,
   ReviewInput,
+  ReviewRequestContext,
   ReviewResult,
   Rule,
+  SemanticImpact,
+  SemanticImpactType,
 } from "./types";

@@ -3,7 +3,8 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { Project, type SourceFile, SyntaxKind } from "ts-morph";
 
-import type { DiffAnalysis, ReviewContext } from "../types";
+import { detectSemanticImpacts, type SemanticCheckerOptions } from "../semantic/semanticChecker";
+import type { DiffAnalysis, ReviewContext, ReviewRequestContext } from "../types";
 
 const normalizePath = (value: string): string => {
   return value.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -52,6 +53,8 @@ const NEW_REPOSITORY_PATTERN = /\bnew\s+[A-Za-z_$][\w$]*Repository\b/;
 interface BuildContextOptions {
   workspaceRoot?: string;
   sourceFilePaths?: string[];
+  requestContext?: ReviewRequestContext;
+  semantic?: SemanticCheckerOptions;
 }
 
 export const buildContext = async (
@@ -156,6 +159,13 @@ export const buildContext = async (
 
   return {
     analysis,
+    ...(options.requestContext ? { requestContext: options.requestContext } : {}),
+    semanticImpacts: detectSemanticImpacts(
+      analysis,
+      sourceFiles,
+      workspaceRoot,
+      options.semantic ?? {},
+    ),
     functionChanged,
     interfaceChanged,
     importAdded,

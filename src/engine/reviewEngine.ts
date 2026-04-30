@@ -3,6 +3,7 @@ import { matchesGlob, normalizePathForMatch } from "../config/pattern";
 import { DEFAULT_RELATED_CODE_LIMIT, MIN_RELATED_CODE_SCORE } from "../constants/embedding";
 import { DEFAULT_CACHE_MAX_ENTRIES, REVIEW_SCHEMA_VERSION } from "../constants/review";
 import { buildContext } from "../context/contextBuilder";
+import { buildReviewResultContext, mergeReviewRequestContext } from "../context/requestContext";
 import {
   type CodeCandidate,
   type ScoredCodeCandidate,
@@ -11,9 +12,11 @@ import {
 import { LruCache } from "../engine/cache";
 import { type GemmaReviewInput, reviewWithGemma } from "../llm/gemmaClient";
 import { DEFAULT_RULES, runRules } from "../rules";
+import { REACT_RULES, TANSTACK_QUERY_RULES } from "../rules/frameworkRules";
 import {
   diffGuardConfigSchema,
   reviewBatchInputSchema,
+  reviewBatchResultSchema,
   reviewInputSchema,
   reviewResultSchema,
 } from "../schema/review.schema";
@@ -21,9 +24,12 @@ import type {
   DiffAnalysis,
   DiffGuardConfig,
   Finding,
+  GnosisMemoryHint,
   Issue,
   IssueMetadata,
   LlmReview,
+  ReviewBatchCandidateScore,
+  ReviewBatchResult,
   ReviewInput,
   ReviewResult,
   Rule,
@@ -39,10 +45,17 @@ const FINDING_RULE_ID_BY_RULE_ID: Record<string, string> = {
   DG002: "INTERFACE_CHANGE",
   DG003: "UNUSED_IMPORT",
   DG004: "DI_VIOLATION",
+  DG_CONV_001: "DO_NOT_EXTRACT_VIOLATION",
+  DG_SEM_001: "SEMANTIC_API_IMPACT",
+  DG_REACT_001: "REACT_HOOK_ORDER",
+  DG_QUERY_001: "TANSTACK_QUERY_KEY_MISMATCH",
 };
 const BLOCKING_REASON_BY_FINDING_RULE_ID: Record<string, string> = {
   API_BREAK: "api-compatibility",
   DI_VIOLATION: "di-violation",
+  DO_NOT_EXTRACT_VIOLATION: "do-not-extract-violation",
+  SEMANTIC_API_IMPACT: "semantic-api-impact",
+  REACT_HOOK_ORDER: "react-hook-order",
 };
 
 const toUnique = <T extends string>(values: T[]): T[] => {
@@ -245,6 +258,32 @@ const applySuppressions = (issues: Issue[], suppressions?: SuppressionConfig[]):
   });
 };
 
+const attachRequestMetadata = (
+  issues: Issue[],
+  resultContext:
+    | {
+        proposalId?: string | undefined;
+        patchPlanId?: string | undefined;
+        operationIds?: string[] | undefined;
+      }
+    | undefined,
+): Issue[] => {
+  if (!resultContext) {
+    return issues;
+  }
+
+  const operationId = resultContext.operationIds?.[0];
+  return issues.map((issue) => ({
+    ...issue,
+    metadata: {
+      ...(issue.metadata ?? {}),
+      ...(resultContext.proposalId ? { proposalId: resultContext.proposalId } : {}),
+      ...(resultContext.patchPlanId ? { patchPlanId: resultContext.patchPlanId } : {}),
+      ...(operationId ? { operationId } : {}),
+    },
+  }));
+};
+
 const toFindingRuleId = (issue: Issue): string => {
   const mappedFromRuleId = FINDING_RULE_ID_BY_RULE_ID[issue.ruleId];
   if (mappedFromRuleId) {
@@ -275,8 +314,13 @@ const toFindingId = (issue: Issue, index: number): string => {
 
 const toFindingMetadata = (issue: Issue, findingRuleId: string): IssueMetadata => {
   const remediation = issue.metadata?.remediation ?? issue.remediation;
+  const contextMetadata = {
+    ...(issue.metadata?.proposalId ? { proposalId: issue.metadata.proposalId } : {}),
+    ...(issue.metadata?.patchPlanId ? { patchPlanId: issue.metadata.patchPlanId } : {}),
+    ...(issue.metadata?.operationId ? { operationId: issue.metadata.operationId } : {}),
+  };
   if (issue.severity !== "error") {
-    return { remediation };
+    return { remediation, ...contextMetadata };
   }
 
   return {
@@ -285,7 +329,62 @@ const toFindingMetadata = (issue: Issue, findingRuleId: string): IssueMetadata =
       BLOCKING_REASON_BY_FINDING_RULE_ID[findingRuleId] ??
       "error-threshold",
     remediation,
+    ...contextMetadata,
   };
+};
+
+const categoryForFinding = (finding: Finding): GnosisMemoryHint["category"] => {
+  if (finding.ruleId.includes("DI") || finding.ruleId.includes("EXTRACT")) {
+    return "architecture";
+  }
+  if (finding.ruleId.includes("UNUSED_IMPORT")) {
+    return "coding_convention";
+  }
+  return "debugging";
+};
+
+export const buildMemoryHints = (
+  findings: Finding[],
+  resultContext?: ReviewResult["context"],
+): GnosisMemoryHint[] => {
+  return findings
+    .filter((finding) => finding.level === "error")
+    .map((finding, index) => {
+      const operationId = finding.metadata.operationId ?? resultContext?.operationIds?.[0];
+      const evidence: GnosisMemoryHint["evidence"] = [
+        {
+          type: "finding",
+          value: `${finding.ruleId}: ${finding.message}`,
+        },
+      ];
+      if (operationId) {
+        evidence.push({
+          type: "operation",
+          value: operationId,
+        });
+      }
+      const source = {
+        ...((finding.metadata.proposalId ?? resultContext?.proposalId)
+          ? { proposalId: finding.metadata.proposalId ?? resultContext?.proposalId }
+          : {}),
+        ...((finding.metadata.patchPlanId ?? resultContext?.patchPlanId)
+          ? { patchPlanId: finding.metadata.patchPlanId ?? resultContext?.patchPlanId }
+          : {}),
+        ...(operationId ? { operationId } : {}),
+      };
+
+      return {
+        id: `memory-hint-${finding.id}-${index + 1}`,
+        severity: finding.level,
+        title: `DiffGuard blocked ${finding.ruleId}`,
+        content: `${finding.message} Remediation: ${finding.metadata.remediation}`,
+        category: categoryForFinding(finding),
+        kind: "lesson",
+        tags: ["diffguard", finding.ruleId, finding.metadata.blockingReason ?? "blocking"],
+        evidence,
+        ...(Object.keys(source).length > 0 ? { source } : {}),
+      };
+    });
 };
 
 export interface ReviewEngineOptions {
@@ -306,6 +405,7 @@ export interface ReviewEngineOptions {
   config?: DiffGuardConfig;
   pluginRules?: Rule[];
   rules?: Rule[];
+  emitMemoryHints?: boolean;
   cache?: {
     enabled?: boolean;
     maxEntries?: number;
@@ -318,6 +418,8 @@ export const reviewDiff = async (
 ): Promise<ReviewResult> => {
   const validatedInput = reviewInputSchema.parse(input);
   const effectiveConfig = diffGuardConfigSchema.parse(options.config ?? {});
+  const requestContext = mergeReviewRequestContext(validatedInput.context);
+  const resultContext = buildReviewResultContext(requestContext);
 
   const cacheEnabled = options.cache?.enabled ?? effectiveConfig.cache?.enabled ?? true;
   const cacheMaxEntries =
@@ -335,16 +437,23 @@ export const reviewDiff = async (
   const context = await buildContext(analysis, {
     ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}),
     sourceFilePaths: filteredSourceFilePaths,
+    ...(requestContext ? { requestContext } : {}),
+    semantic: effectiveConfig.semantic ?? {},
   });
 
   const activeRules = mergeRules([
     ...(options.rules ?? DEFAULT_RULES),
+    ...(effectiveConfig.frameworkRules?.react ? REACT_RULES : []),
+    ...(effectiveConfig.frameworkRules?.tanstackQuery ? TANSTACK_QUERY_RULES : []),
     ...(options.pluginRules ?? []),
   ]).filter((rule) => isRuleEnabled(rule, effectiveConfig.rules));
 
   const rawIssues = runRules(context, activeRules);
   const overriddenIssues = applyRuleOverrides(rawIssues, effectiveConfig.rules);
-  const issues = applySuppressions(overriddenIssues, effectiveConfig.suppressions);
+  const issues = attachRequestMetadata(
+    applySuppressions(overriddenIssues, effectiveConfig.suppressions),
+    resultContext,
+  );
 
   const levelCounts: Record<Severity, number> = issues.reduce<Record<Severity, number>>(
     (acc, issue) => {
@@ -393,7 +502,12 @@ export const reviewDiff = async (
     levelCounts,
     findings,
     issues,
+    ...(resultContext ? { context: resultContext } : {}),
   };
+
+  if (options.emitMemoryHints) {
+    result.memoryHints = buildMemoryHints(findings, resultContext);
+  }
 
   if (options.enableLlm) {
     const llmClient = options.llmClient ?? reviewWithGemma;
@@ -425,4 +539,64 @@ export const reviewBatch = async (
 ): Promise<ReviewResult[]> => {
   const validated = reviewBatchInputSchema.parse({ items: inputs });
   return Promise.all(validated.items.map((item) => reviewDiff(item, options)));
+};
+
+const scoreCandidate = (
+  result: ReviewResult,
+  input: ReviewInput,
+  index: number,
+): ReviewBatchCandidateScore => {
+  const errors = result.levelCounts.error;
+  const warnings = result.levelCounts.warn;
+  const infos = result.levelCounts.info;
+  const score = (result.blocking ? 1000 : 0) + errors * 100 + warnings * 10 + infos;
+
+  return {
+    candidateId: input.candidateId ?? `candidate-${index + 1}`,
+    index,
+    score,
+    blocking: result.blocking,
+    errors,
+    warnings,
+    infos,
+  };
+};
+
+export const reviewBatchCandidates = async (
+  inputs: ReviewInput[],
+  options: ReviewEngineOptions = {},
+): Promise<ReviewBatchResult> => {
+  const validated = reviewBatchInputSchema.parse({ items: inputs });
+  const results = await Promise.all(validated.items.map((item) => reviewDiff(item, options)));
+  const scores = validated.items.map((item, index) => {
+    const result = results[index];
+    if (!result) {
+      throw new Error(`Missing review result for batch item ${index}.`);
+    }
+
+    return scoreCandidate(result, item, index);
+  });
+  const sortedScores = [...scores].sort((left, right) => {
+    if (left.score !== right.score) {
+      return left.score - right.score;
+    }
+
+    return left.index - right.index;
+  });
+  const recommended = sortedScores[0];
+  const result: ReviewBatchResult = {
+    schemaVersion: REVIEW_SCHEMA_VERSION,
+    results,
+    batchSummary: {
+      ...(recommended ? { recommendedCandidateId: recommended.candidateId } : {}),
+      reasons: recommended
+        ? [
+            `${recommended.candidateId} has the lowest risk score (${recommended.score}) with ${recommended.errors} errors and ${recommended.warnings} warnings.`,
+          ]
+        : [],
+      scores,
+    },
+  };
+
+  return reviewBatchResultSchema.parse(result);
 };

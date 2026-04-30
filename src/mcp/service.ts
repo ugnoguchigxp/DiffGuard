@@ -7,11 +7,16 @@ import { loadDotEnvFile } from "../config/dotenv";
 import { resolveLlmRuntimeSettings } from "../config/llmRuntime";
 import { loadDiffGuardConfig } from "../config/loader";
 import { REVIEW_SCHEMA_VERSION } from "../constants/review";
-import { reviewBatch, reviewDiff } from "../engine/reviewEngine";
+import { mergeReviewRequestContext, mergeReviewRequestContexts } from "../context/requestContext";
+import { reviewBatch, reviewBatchCandidates, reviewDiff } from "../engine/reviewEngine";
 import { reviewWithGemma } from "../llm/gemmaClient";
 import { reviewWithLocalOpenAi } from "../llm/localOpenAiClient";
 import { toSarif } from "../output/sarif";
 import { loadPluginRules } from "../plugins/loader";
+import {
+  astmendOperationMetadataSchema,
+  reviewRequestContextSchema,
+} from "../schema/review.schema";
 import type { DiffGuardConfig, LlmReview, ReviewInput, Rule } from "../types";
 
 interface RuntimeOptions {
@@ -73,6 +78,9 @@ const reviewDiffInputSchema = {
   pluginPaths: z.array(z.string().min(1)).optional(),
   llmRelatedCode: z.string().optional(),
   enableLlm: z.boolean().optional(),
+  context: reviewRequestContextSchema.optional(),
+  astmendOperations: z.array(astmendOperationMetadataSchema).optional(),
+  emitMemoryHints: z.boolean().optional(),
   format: z.enum(["json", "sarif"]).optional(),
 } satisfies z.ZodRawShape;
 
@@ -82,6 +90,9 @@ const reviewBatchInputSchema = {
       z.object({
         diff: z.string().min(1),
         files: z.array(z.string().min(1)).optional(),
+        candidateId: z.string().min(1).optional(),
+        context: reviewRequestContextSchema.optional(),
+        astmendOperations: z.array(astmendOperationMetadataSchema).optional(),
       }),
     )
     .min(1),
@@ -90,6 +101,10 @@ const reviewBatchInputSchema = {
   pluginPaths: z.array(z.string().min(1)).optional(),
   llmRelatedCode: z.string().optional(),
   enableLlm: z.boolean().optional(),
+  context: reviewRequestContextSchema.optional(),
+  astmendOperations: z.array(astmendOperationMetadataSchema).optional(),
+  emitMemoryHints: z.boolean().optional(),
+  compareCandidates: z.boolean().optional(),
   format: z.enum(["json", "sarif"]).optional(),
 } satisfies z.ZodRawShape;
 
@@ -288,6 +303,9 @@ const reviewDiffTool = async (
     {
       diff: args.diff,
       files,
+      ...(args.context || args.astmendOperations
+        ? { context: mergeReviewRequestContext(args.context, args.astmendOperations ?? []) }
+        : {}),
     },
     {
       workspaceRoot: runtime.workspaceRoot,
@@ -297,6 +315,7 @@ const reviewDiffTool = async (
       ...(args.llmRelatedCode ? { llmRelatedCode: args.llmRelatedCode } : {}),
       config: runtime.config,
       pluginRules: runtime.pluginRules,
+      emitMemoryHints: args.emitMemoryHints ?? false,
     },
   );
 
@@ -334,17 +353,32 @@ const reviewBatchTool = async (
     reviewInputs.push({
       diff: item.diff,
       files,
+      ...(item.candidateId ? { candidateId: item.candidateId } : {}),
+      ...(args.context || item.context || args.astmendOperations || item.astmendOperations
+        ? {
+            context: mergeReviewRequestContext(
+              mergeReviewRequestContexts(args.context, item.context),
+              [...(args.astmendOperations ?? []), ...(item.astmendOperations ?? [])],
+            ),
+          }
+        : {}),
     });
   }
 
-  const results = await reviewBatch(reviewInputs, {
+  const reviewOptions = {
     workspaceRoot: runtime.workspaceRoot,
     enableLlm: runtime.enableLlm,
     ...(runtime.llmClient ? { llmClient: runtime.llmClient } : {}),
     ...(args.llmRelatedCode ? { llmRelatedCode: args.llmRelatedCode } : {}),
     config: runtime.config,
     pluginRules: runtime.pluginRules,
-  });
+    emitMemoryHints: args.emitMemoryHints ?? false,
+  };
+
+  const batchResult = args.compareCandidates
+    ? await reviewBatchCandidates(reviewInputs, reviewOptions)
+    : undefined;
+  const results = batchResult?.results ?? (await reviewBatch(reviewInputs, reviewOptions));
 
   if (args.format === "sarif") {
     const sarif = toSarif(results);
@@ -352,8 +386,10 @@ const reviewBatchTool = async (
   }
 
   return toToolResult({
-    schemaVersion: REVIEW_SCHEMA_VERSION,
-    results,
+    ...(batchResult ?? {
+      schemaVersion: REVIEW_SCHEMA_VERSION,
+      results,
+    }),
   });
 };
 

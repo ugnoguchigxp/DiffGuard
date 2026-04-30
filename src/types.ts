@@ -5,18 +5,94 @@ export type Severity = "info" | "warn" | "error";
 
 export type IssueType = string;
 
+export type ReviewRequestSource = "converge" | "astmend" | "manual" | "unknown";
+export type ReviewRequestIntent =
+  | "refactor"
+  | "extract"
+  | "move"
+  | "rename"
+  | "api-change"
+  | "cleanup";
+
+export interface AstmendOperationMetadata {
+  operationId: string;
+  type:
+    | "rename_symbol"
+    | "move_symbol"
+    | "extract_function"
+    | "replace_node"
+    | "delete_node"
+    | "insert_node";
+  file: string;
+  symbol?: string | undefined;
+  destinationFile?: string | undefined;
+  beforeHash?: string | undefined;
+  afterHash?: string | undefined;
+}
+
+export interface ReviewRequestContext {
+  schemaVersion?: "1.0.0" | undefined;
+  source?: ReviewRequestSource | undefined;
+  proposalId?: string | undefined;
+  patchPlanId?: string | undefined;
+  intent?: ReviewRequestIntent | undefined;
+  constraints?:
+    | {
+        doNotExtract?: string[] | undefined;
+        allowedSharedTargets?: string[] | undefined;
+        forbiddenSharedTargets?: string[] | undefined;
+        architecturalBoundaries?:
+          | Array<{
+              from: string;
+              to: string;
+              allowed: boolean;
+              reason?: string | undefined;
+            }>
+          | undefined;
+      }
+    | undefined;
+  astmendOperations?: AstmendOperationMetadata[] | undefined;
+}
+
 export interface ReviewInput {
   diff: string;
   files: string[];
+  candidateId?: string | undefined;
+  context?: ReviewRequestContext | undefined;
 }
 
 export interface ReviewBatchInput {
   items: ReviewInput[];
 }
 
+export interface ReviewBatchCandidateScore {
+  candidateId: string;
+  index: number;
+  score: number;
+  blocking: boolean;
+  errors: number;
+  warnings: number;
+  infos: number;
+}
+
+export interface ReviewBatchSummary {
+  recommendedCandidateId?: string | undefined;
+  reasons: string[];
+  scores: ReviewBatchCandidateScore[];
+}
+
+export interface ReviewBatchResult {
+  schemaVersion: string;
+  results: ReviewResult[];
+  batchSummary?: ReviewBatchSummary | undefined;
+}
+
 export interface IssueMetadata {
   blockingReason?: string | undefined;
   remediation?: string | undefined;
+  proposalId?: string | undefined;
+  patchPlanId?: string | undefined;
+  operationId?: string | undefined;
 }
 
 export interface Issue {
@@ -59,6 +135,14 @@ export interface ReviewResult {
   findings: Finding[];
   issues: Issue[];
   llm?: LlmReview | undefined;
+  context?:
+    | {
+        proposalId?: string | undefined;
+        patchPlanId?: string | undefined;
+        operationIds?: string[] | undefined;
+      }
+    | undefined;
+  memoryHints?: GnosisMemoryHint[] | undefined;
 }
 
 export interface DiffLineDetail {
@@ -90,8 +174,22 @@ export interface DiffAnalysis {
   changeTypes: ChangeType[];
 }
 
+export type SemanticImpactType = "export-signature-change" | "export-removed";
+
+export interface SemanticImpact {
+  type: SemanticImpactType;
+  file: string;
+  symbol: string;
+  message: string;
+  line?: number | undefined;
+  hunk?: string | undefined;
+  referenceCount: number;
+}
+
 export interface ReviewContext {
   analysis: DiffAnalysis;
+  requestContext?: ReviewRequestContext | undefined;
+  semanticImpacts: SemanticImpact[];
   functionChanged: boolean;
   interfaceChanged: boolean;
   importAdded: boolean;
@@ -99,6 +197,27 @@ export interface ReviewContext {
   unhandledUsage: boolean;
   notUsed: boolean;
   controllerHasNewRepository: boolean;
+}
+
+export interface GnosisMemoryHint {
+  id: string;
+  severity: Severity;
+  title: string;
+  content: string;
+  category: "architecture" | "debugging" | "testing" | "coding_convention" | "workflow";
+  kind: "lesson" | "risk" | "rule" | "procedure";
+  tags: string[];
+  evidence: Array<{
+    type: "finding" | "issue" | "diff" | "operation";
+    value: string;
+  }>;
+  source?:
+    | {
+        proposalId?: string | undefined;
+        patchPlanId?: string | undefined;
+        operationId?: string | undefined;
+      }
+    | undefined;
 }
 
 export interface Rule {
@@ -137,6 +256,19 @@ export interface DiffGuardConfig {
     | {
         enabled?: boolean | undefined;
         maxEntries?: number | undefined;
+      }
+    | undefined;
+  semantic?:
+    | {
+        enabled?: boolean | undefined;
+        maxFiles?: number | undefined;
+        timeoutMs?: number | undefined;
+      }
+    | undefined;
+  frameworkRules?:
+    | {
+        react?: boolean | undefined;
+        tanstackQuery?: boolean | undefined;
       }
     | undefined;
   llm?:

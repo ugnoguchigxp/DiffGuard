@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { reviewBatch, reviewDiff } from "../../src/engine/reviewEngine";
+import { reviewBatch, reviewBatchCandidates, reviewDiff } from "../../src/engine/reviewEngine";
 import type { Rule } from "../../src/types";
 
 const createTempWorkspace = async (): Promise<string> => {
@@ -62,6 +62,116 @@ describe("reviewDiff", () => {
       expect(result.findings[0]?.ruleId).toBe("API_BREAK");
       expect(result.findings[0]?.metadata.blockingReason).toBe("api-compatibility");
       expect(result.issues[0]?.type).toBe("missing-update");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates review request context to results and memory hints", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const servicePath = path.join(workspaceRoot, "src/service.ts");
+      const consumerPath = path.join(workspaceRoot, "src/consumer.ts");
+
+      await writeFile(
+        servicePath,
+        "export function getUser(id: string, verbose: boolean): string { return id; }\n",
+      );
+      await writeFile(
+        consumerPath,
+        [
+          'import { getUser } from "./service";',
+          'export const useUser = (): string => getUser("1", true);',
+          "",
+        ].join("\n"),
+      );
+
+      const diff = [
+        "diff --git a/src/service.ts b/src/service.ts",
+        "--- a/src/service.ts",
+        "+++ b/src/service.ts",
+        "@@ -1,1 +1,1 @@",
+        "-export function getUser(id: string): string { return id; }",
+        "+export function getUser(id: string, verbose: boolean): string { return id; }",
+      ].join("\n");
+
+      const result = await reviewDiff(
+        {
+          diff,
+          files: ["src/service.ts"],
+          context: {
+            source: "astmend",
+            proposalId: "proposal-1",
+            patchPlanId: "plan-1",
+            astmendOperations: [
+              {
+                operationId: "op-1",
+                type: "replace_node",
+                file: "src/service.ts",
+                symbol: "getUser",
+              },
+            ],
+          },
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [servicePath, consumerPath],
+          emitMemoryHints: true,
+        },
+      );
+
+      expect(result.context).toEqual({
+        proposalId: "proposal-1",
+        patchPlanId: "plan-1",
+        operationIds: ["op-1"],
+      });
+      expect(result.findings[0]?.metadata.proposalId).toBe("proposal-1");
+      expect(result.findings[0]?.metadata.operationId).toBe("op-1");
+      expect(result.memoryHints?.[0]?.source?.proposalId).toBe("proposal-1");
+      expect(result.memoryHints?.[0]?.source?.operationId).toBe("op-1");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks doNotExtract logic moved into shared code", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const sharedPath = path.join(workspaceRoot, "src/shared/pricing.ts");
+      await mkdir(path.dirname(sharedPath), { recursive: true });
+      await writeFile(sharedPath, "export const validatePrice = () => true;\n");
+
+      const diff = [
+        "diff --git a/src/shared/pricing.ts b/src/shared/pricing.ts",
+        "--- /dev/null",
+        "+++ b/src/shared/pricing.ts",
+        "@@ -0,0 +1,1 @@",
+        "+export const validatePrice = () => true;",
+      ].join("\n");
+
+      const result = await reviewDiff(
+        {
+          diff,
+          files: ["src/shared/pricing.ts"],
+          context: {
+            constraints: {
+              doNotExtract: ["validatePrice"],
+            },
+          },
+        },
+        {
+          workspaceRoot,
+          sourceFilePaths: [sharedPath],
+          emitMemoryHints: true,
+        },
+      );
+
+      expect(result.blocking).toBe(true);
+      expect(result.findings[0]?.ruleId).toBe("DO_NOT_EXTRACT_VIOLATION");
+      expect(result.findings[0]?.metadata.blockingReason).toBe("do-not-extract-violation");
+      expect(result.memoryHints?.[0]?.tags).toContain("DO_NOT_EXTRACT_VIOLATION");
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }
@@ -824,6 +934,163 @@ describe("reviewDiff", () => {
 
       expect(results).toHaveLength(1);
       expect(results[0]?.schemaVersion).toBe("1.0.0");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("adds semantic API impact findings when semantic checker is enabled", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const servicePath = path.join(workspaceRoot, "src/service.ts");
+      const consumerPath = path.join(workspaceRoot, "src/consumer.ts");
+      await writeFile(
+        servicePath,
+        "export function getUser(id: string, verbose: boolean): string { return id; }\n",
+      );
+      await writeFile(
+        consumerPath,
+        [
+          'import { getUser } from "./service";',
+          'export const useUser = (): string => getUser("1", true);',
+          "",
+        ].join("\n"),
+      );
+
+      const diff = [
+        "diff --git a/src/service.ts b/src/service.ts",
+        "--- a/src/service.ts",
+        "+++ b/src/service.ts",
+        "@@ -1,1 +1,1 @@",
+        "-export function getUser(id: string): string { return id; }",
+        "+export function getUser(id: string, verbose: boolean): string { return id; }",
+      ].join("\n");
+
+      const result = await reviewDiff(
+        { diff, files: ["src/service.ts"] },
+        {
+          workspaceRoot,
+          sourceFilePaths: [servicePath, consumerPath],
+          config: {
+            semantic: {
+              enabled: true,
+            },
+            rules: {
+              DG001: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      );
+
+      expect(result.findings.some((finding) => finding.ruleId === "SEMANTIC_API_IMPACT")).toBe(
+        true,
+      );
+      expect(result.blocking).toBe(true);
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("runs framework rules only when enabled", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const componentPath = path.join(workspaceRoot, "src/Component.tsx");
+      await writeFile(componentPath, "export const Component = () => null;\n");
+      const diff = [
+        "diff --git a/src/Component.tsx b/src/Component.tsx",
+        "--- a/src/Component.tsx",
+        "+++ b/src/Component.tsx",
+        "@@ -1,1 +1,2 @@",
+        "+if (enabled) useEffect(() => {}, []);",
+      ].join("\n");
+
+      const disabled = await reviewDiff(
+        { diff, files: ["src/Component.tsx"] },
+        {
+          workspaceRoot,
+          sourceFilePaths: [componentPath],
+        },
+      );
+      const enabled = await reviewDiff(
+        { diff, files: ["src/Component.tsx"] },
+        {
+          workspaceRoot,
+          sourceFilePaths: [componentPath],
+          config: {
+            frameworkRules: {
+              react: true,
+            },
+          },
+        },
+      );
+
+      expect(disabled.findings.some((finding) => finding.ruleId === "REACT_HOOK_ORDER")).toBe(
+        false,
+      );
+      expect(enabled.findings.some((finding) => finding.ruleId === "REACT_HOOK_ORDER")).toBe(true);
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("scores batch candidates and recommends the lowest-risk candidate", async () => {
+    const workspaceRoot = await createTempWorkspace();
+
+    try {
+      const safePath = path.join(workspaceRoot, "src/safe.ts");
+      const unsafePath = path.join(workspaceRoot, "src/userController.ts");
+      await writeFile(safePath, "export const safe = 1;\n");
+      await writeFile(
+        unsafePath,
+        [
+          "export class UserController {",
+          "  run() {",
+          "    const repo = new UserRepository();",
+          "    return repo.find();",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      );
+
+      const result = await reviewBatchCandidates(
+        [
+          {
+            candidateId: "unsafe",
+            diff: [
+              "diff --git a/src/userController.ts b/src/userController.ts",
+              "--- a/src/userController.ts",
+              "+++ b/src/userController.ts",
+              "@@ -1,1 +1,2 @@",
+              "+const repo = new UserRepository();",
+            ].join("\n"),
+            files: ["src/userController.ts"],
+          },
+          {
+            candidateId: "safe",
+            diff: [
+              "diff --git a/src/safe.ts b/src/safe.ts",
+              "--- a/src/safe.ts",
+              "+++ b/src/safe.ts",
+              "@@ -1,1 +1,1 @@",
+              "-export const safe = 0;",
+              "+export const safe = 1;",
+            ].join("\n"),
+            files: ["src/safe.ts"],
+          },
+        ],
+        {
+          workspaceRoot,
+          sourceFilePaths: [safePath, unsafePath],
+        },
+      );
+
+      expect(result.batchSummary?.recommendedCandidateId).toBe("safe");
+      expect(result.batchSummary?.scores).toHaveLength(2);
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }
