@@ -35,6 +35,7 @@ describe("diffGuard MCP service", () => {
       "analyze_diff",
       "review_diff",
       "review_batch",
+      "generate_fix",
     ]);
   });
 

@@ -11,6 +11,7 @@ import { mergeReviewRequestContext, mergeReviewRequestContexts } from "../contex
 import { reviewBatch, reviewBatchCandidates, reviewDiff } from "../engine/reviewEngine";
 import { reviewWithGemma } from "../llm/gemmaClient";
 import { reviewWithLocalOpenAi } from "../llm/localOpenAiClient";
+import { generateFixWithLocalOpenAi } from "../llm/patchGenerator";
 import { toSarif } from "../output/sarif";
 import { loadPluginRules } from "../plugins/loader";
 import {
@@ -108,6 +109,20 @@ const reviewBatchInputSchema = {
   format: z.enum(["json", "sarif"]).optional(),
 } satisfies z.ZodRawShape;
 
+const generateFixInputSchema = {
+  diff: z.string().min(1),
+  finding: z.object({
+    id: z.string(),
+    ruleId: z.string(),
+    message: z.string(),
+    file: z.string().optional(),
+    line: z.number().optional(),
+    symbol: z.string().optional(),
+  }),
+  workspaceRoot: z.string().min(1).optional(),
+  configPath: z.string().min(1).optional(),
+} satisfies z.ZodRawShape;
+
 const TOOL_DEFINITIONS: DiffGuardMcpToolDefinition[] = [
   {
     name: "analyze_diff",
@@ -127,6 +142,12 @@ const TOOL_DEFINITIONS: DiffGuardMcpToolDefinition[] = [
     title: "Review Batch",
     description: "Run DiffGuard review in batch for multiple diffs.",
     inputSchema: reviewBatchInputSchema,
+  },
+  {
+    name: "generate_fix",
+    title: "Generate Fix",
+    description: "Generate an AI-driven fix (unified diff) for a specific finding using local LLM.",
+    inputSchema: generateFixInputSchema,
   },
 ];
 
@@ -431,6 +452,53 @@ export const createDiffGuardMcpService = (
             z.object(reviewBatchInputSchema).parse(args),
             serviceOptions,
           );
+        }
+
+        if (name === "generate_fix") {
+          const argsObj = z.object(generateFixInputSchema).parse(args);
+          const runtime = await buildRuntimeContext(
+            {
+              ...(argsObj.workspaceRoot ? { workspaceRoot: argsObj.workspaceRoot } : {}),
+              ...(argsObj.configPath ? { configPath: argsObj.configPath } : {}),
+              enableLlm: true, // Fix generation always requires LLM
+            },
+            serviceOptions,
+          );
+
+          if (!runtime.llmClient) {
+            return toToolError("LLM is not enabled or configured correctly.");
+          }
+
+          // We need LocalOpenAiClientOptions for generateFixWithLocalOpenAi
+          // Since buildRuntimeContext encapsulates the client, we might need a way to get settings
+          // For now, let's re-resolve settings or use a simplified approach
+          const dotenv = await loadDotEnvFile(runtime.workspaceRoot, ".env", { mutateProcessEnv: false });
+          const llmSettings = resolveLlmRuntimeSettings(runtime.config, true, { ...dotenv, ...process.env });
+
+          if (llmSettings.mode !== "local-openai-api") {
+            return toToolError("generate_fix currently requires local-openai-api mode (daemon API).");
+          }
+
+          if (!argsObj.finding.file || !argsObj.finding.line) {
+            return toToolError("finding.file and finding.line are required to generate a fix.");
+          }
+
+          const fix = await generateFixWithLocalOpenAi(
+            {
+              diff: argsObj.diff,
+              finding: argsObj.finding,
+              workspaceRoot: runtime.workspaceRoot,
+            },
+            {
+              baseUrl: llmSettings.apiBaseUrl,
+              model: llmSettings.model,
+              timeoutMs: llmSettings.timeoutMs,
+              maxTokens: llmSettings.maxTokens,
+              temperature: llmSettings.temperature,
+            },
+          );
+
+          return toToolResult({ fix });
         }
 
         return toToolError(`Unknown MCP tool: ${name}`);

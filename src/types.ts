@@ -95,6 +95,11 @@ export interface IssueMetadata {
   operationId?: string | undefined;
 }
 
+export interface SuggestedFix {
+  description: string;
+  patch: string;
+}
+
 export interface Issue {
   id?: string | undefined;
   type: IssueType;
@@ -108,6 +113,7 @@ export interface Issue {
   hunk?: string | undefined;
   symbol?: string | undefined;
   metadata?: IssueMetadata | undefined;
+  fix?: SuggestedFix | undefined;
 }
 
 export interface LlmReview {
@@ -123,8 +129,10 @@ export interface Finding {
   message: string;
   file?: string | undefined;
   line?: number | undefined;
+  symbol?: string | undefined;
   ruleId: string;
   metadata: IssueMetadata;
+  fix?: SuggestedFix | undefined;
 }
 
 export interface ReviewResult {

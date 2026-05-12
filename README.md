@@ -152,6 +152,7 @@ pnpm mcp
 - `analyze_diff`: diff の変更タイプとファイル分析を返す
 - `review_diff`: 単一 diff をレビューして JSON または SARIF を返す
 - `review_batch`: 複数 diff をまとめてレビューする
+- `generate_fix`: 指定した指摘（Finding）に対する修正パッチを AI で生成する
 
 直接 stdio fallback の IDE 側設定例（MCP クライアント共通の command/args 形式）:
 

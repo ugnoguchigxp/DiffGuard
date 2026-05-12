@@ -52,7 +52,7 @@ const trimTrailingSlash = (value: string): string => {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 };
 
-const toChatCompletionsUrl = (baseUrl: string): string => {
+export const toChatCompletionsUrl = (baseUrl: string): string => {
   const normalized = trimTrailingSlash(baseUrl.trim());
   if (normalized.endsWith("/chat/completions")) {
     return normalized;
