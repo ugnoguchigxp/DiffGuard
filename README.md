@@ -468,3 +468,7 @@ src/
  ├─ cli.ts
  └─ types.ts
 ```
+
+## ライセンス
+
+MIT
