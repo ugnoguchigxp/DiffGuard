@@ -158,4 +158,24 @@ describe("review schemas", () => {
     expect(parsed.semantic?.enabled).toBe(true);
     expect(parsed.frameworkRules?.react).toBe(true);
   });
+
+  it("rejects removed llm config", () => {
+    expect(() =>
+      diffGuardConfigSchema.parse({
+        llm: {
+          enabled: true,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("strips unknown keys for forward compatibility", () => {
+    const parsed = diffGuardConfigSchema.parse({
+      failOn: "warn",
+      futureOption: true,
+    });
+
+    expect(parsed.failOn).toBe("warn");
+    expect("futureOption" in parsed).toBe(false);
+  });
 });

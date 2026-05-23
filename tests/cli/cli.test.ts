@@ -12,7 +12,6 @@ describe("parseCliArgs", () => {
       "src/a.ts,src/b.ts",
       "--file",
       "src/c.ts",
-      "--enable-llm",
       "--emit-memory-hints",
       "--compare-candidates",
       "--context-file",
@@ -27,7 +26,6 @@ describe("parseCliArgs", () => {
     ]);
 
     expect(args.files).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
-    expect(args.enableLlm).toBe(true);
     expect(args.emitMemoryHints).toBe(true);
     expect(args.compareCandidates).toBe(true);
     expect(args.contextFile).toBe("/tmp/context.json");
@@ -118,56 +116,6 @@ describe("runCli", () => {
 
     expect(code).toBe(1);
     expect(stderr).toContain("Diff input is required");
-  });
-
-  it("reads related code from file for LLM input", async () => {
-    let relatedCode = "";
-
-    const code = await runCli({
-      argv: [
-        "--diff",
-        [
-          "diff --git a/src/service.ts b/src/service.ts",
-          "--- a/src/service.ts",
-          "+++ b/src/service.ts",
-          "@@ -1,1 +1,1 @@",
-          "-export const value = 0;",
-          "+export const value = 1;",
-        ].join("\n"),
-        "--file",
-        "src/service.ts",
-        "--enable-llm",
-        "--llm-related-code-file",
-        "/tmp/related.txt",
-      ],
-      readTextFile: async (filePath) => {
-        if (filePath === "/tmp/related.txt") {
-          return "export const related = true;";
-        }
-        return "";
-      },
-      stdoutWrite: () => {},
-      stderrWrite: () => {},
-      reviewDiffFn: async (_input, options) => {
-        relatedCode = options?.llmRelatedCode ?? "";
-        return {
-          schemaVersion: REVIEW_SCHEMA_VERSION,
-          risk: "low",
-          blocking: false,
-          levelCounts: { error: 0, warn: 0, info: 0 },
-          findings: [],
-          issues: [],
-          llm: {
-            summary: "ok",
-            concerns: [],
-          },
-        };
-      },
-      ...baseConfigOverride,
-    });
-
-    expect(code).toBe(0);
-    expect(relatedCode).toBe("export const related = true;");
   });
 
   it("reads context and Astmend operations from files", async () => {
@@ -453,6 +401,31 @@ describe("runCli", () => {
     expect(stderr).toContain("Unknown option");
   });
 
+  it("rejects removed LLM flags as unknown options", async () => {
+    let stderr = "";
+    const enableCode = await runCli({
+      argv: ["--enable-llm"],
+      stdoutWrite: () => {},
+      stderrWrite: (value) => {
+        stderr += value;
+      },
+      ...baseConfigOverride,
+    });
+    const relatedCode = await runCli({
+      argv: ["--llm-related-code-file", "/tmp/related.txt"],
+      stdoutWrite: () => {},
+      stderrWrite: (value) => {
+        stderr += value;
+      },
+      ...baseConfigOverride,
+    });
+
+    expect(enableCode).toBe(1);
+    expect(relatedCode).toBe(1);
+    expect(stderr).toContain("Unknown option: --enable-llm");
+    expect(stderr).toContain("Unknown option: --llm-related-code-file");
+  });
+
   it("returns error for invalid batch input payload", async () => {
     let stderr = "";
     const code = await runCli({
@@ -530,89 +503,5 @@ describe("runCli", () => {
 
     expect(code).toBe(1);
     expect(stderr).toContain("Source files are required");
-  });
-
-  it("enables llm from env without --enable-llm flag", async () => {
-    const previous = process.env.DIFFGUARD_ENABLE_LLM;
-    process.env.DIFFGUARD_ENABLE_LLM = "true";
-
-    try {
-      let enabledLlm = false;
-      const code = await runCli({
-        argv: [
-          "--diff",
-          "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-export const a=0;\n+export const a=1;",
-          "--file",
-          "src/a.ts",
-        ],
-        reviewDiffFn: async (_input, options) => {
-          enabledLlm = options?.enableLlm ?? false;
-          return {
-            schemaVersion: REVIEW_SCHEMA_VERSION,
-            risk: "low",
-            blocking: false,
-            levelCounts: { error: 0, warn: 0, info: 0 },
-            findings: [],
-            issues: [],
-          };
-        },
-        ...baseConfigOverride,
-      });
-
-      expect(code).toBe(0);
-      expect(enabledLlm).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.DIFFGUARD_ENABLE_LLM;
-      } else {
-        process.env.DIFFGUARD_ENABLE_LLM = previous;
-      }
-    }
-  });
-
-  it("builds local-openai-api llm client from env mode", async () => {
-    const previousEnable = process.env.DIFFGUARD_ENABLE_LLM;
-    const previousMode = process.env.DIFFGUARD_LLM_MODE;
-
-    process.env.DIFFGUARD_ENABLE_LLM = "true";
-    process.env.DIFFGUARD_LLM_MODE = "local-openai-api";
-
-    try {
-      let hasLlmClient = false;
-      const code = await runCli({
-        argv: [
-          "--diff",
-          "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-export const a=0;\n+export const a=1;",
-          "--file",
-          "src/a.ts",
-        ],
-        reviewDiffFn: async (_input, options) => {
-          hasLlmClient = typeof options?.llmClient === "function";
-          return {
-            schemaVersion: REVIEW_SCHEMA_VERSION,
-            risk: "low",
-            blocking: false,
-            levelCounts: { error: 0, warn: 0, info: 0 },
-            findings: [],
-            issues: [],
-          };
-        },
-        ...baseConfigOverride,
-      });
-
-      expect(code).toBe(0);
-      expect(hasLlmClient).toBe(true);
-    } finally {
-      if (previousEnable === undefined) {
-        delete process.env.DIFFGUARD_ENABLE_LLM;
-      } else {
-        process.env.DIFFGUARD_ENABLE_LLM = previousEnable;
-      }
-      if (previousMode === undefined) {
-        delete process.env.DIFFGUARD_LLM_MODE;
-      } else {
-        process.env.DIFFGUARD_LLM_MODE = previousMode;
-      }
-    }
   });
 });

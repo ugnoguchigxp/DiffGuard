@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -62,7 +63,11 @@ const isExecutedDirectly = (): boolean => {
     return false;
   }
 
-  return pathToFileURL(entry).href === import.meta.url;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return pathToFileURL(entry).href === import.meta.url;
+  }
 };
 
 if (isExecutedDirectly()) {

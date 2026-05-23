@@ -11,7 +11,7 @@ describe("dotenv", () => {
     const parsed = parseDotEnv(
       [
         "# comment",
-        "DIFFGUARD_ENABLE_LLM=true",
+        "DIFFGUARD_EXAMPLE_FLAG=true",
         "EMPTY=",
         'QUOTED="hello"',
         "SINGLE='world'",
@@ -19,7 +19,7 @@ describe("dotenv", () => {
       ].join("\n"),
     );
 
-    expect(parsed.DIFFGUARD_ENABLE_LLM).toBe("true");
+    expect(parsed.DIFFGUARD_EXAMPLE_FLAG).toBe("true");
     expect(parsed.EMPTY).toBe("");
     expect(parsed.QUOTED).toBe("hello");
     expect(parsed.SINGLE).toBe("world");
@@ -30,23 +30,23 @@ describe("dotenv", () => {
     const root = await mkdtemp(path.join(tmpdir(), "diffguard-dotenv-"));
     const envPath = path.join(root, ".env");
 
-    const prev = process.env.DIFFGUARD_ENABLE_LLM;
-    process.env.DIFFGUARD_ENABLE_LLM = "preset";
+    const prev = process.env.DIFFGUARD_EXAMPLE_FLAG;
+    process.env.DIFFGUARD_EXAMPLE_FLAG = "preset";
 
     try {
-      await writeFile(envPath, "DIFFGUARD_ENABLE_LLM=true\nDIFFGUARD_LLM_MODE=local-openai-api\n");
+      await writeFile(envPath, "DIFFGUARD_EXAMPLE_FLAG=true\nDIFFGUARD_EXAMPLE_MODE=test\n");
       const parsed = await loadDotEnvFile(root);
 
-      expect(parsed.DIFFGUARD_LLM_MODE).toBe("local-openai-api");
-      expect(process.env.DIFFGUARD_ENABLE_LLM).toBe("preset");
-      expect(process.env.DIFFGUARD_LLM_MODE).toBe("local-openai-api");
+      expect(parsed.DIFFGUARD_EXAMPLE_MODE).toBe("test");
+      expect(process.env.DIFFGUARD_EXAMPLE_FLAG).toBe("preset");
+      expect(process.env.DIFFGUARD_EXAMPLE_MODE).toBe("test");
     } finally {
       if (prev === undefined) {
-        delete process.env.DIFFGUARD_ENABLE_LLM;
+        delete process.env.DIFFGUARD_EXAMPLE_FLAG;
       } else {
-        process.env.DIFFGUARD_ENABLE_LLM = prev;
+        process.env.DIFFGUARD_EXAMPLE_FLAG = prev;
       }
-      delete process.env.DIFFGUARD_LLM_MODE;
+      delete process.env.DIFFGUARD_EXAMPLE_MODE;
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -55,18 +55,18 @@ describe("dotenv", () => {
     const root = await mkdtemp(path.join(tmpdir(), "diffguard-dotenv-"));
     const envPath = path.join(root, ".env");
 
-    const prevMode = process.env.DIFFGUARD_LLM_MODE;
-    delete process.env.DIFFGUARD_LLM_MODE;
+    const prevMode = process.env.DIFFGUARD_EXAMPLE_MODE;
+    delete process.env.DIFFGUARD_EXAMPLE_MODE;
 
     try {
-      await writeFile(envPath, "DIFFGUARD_LLM_MODE=local-openai-api\n");
+      await writeFile(envPath, "DIFFGUARD_EXAMPLE_MODE=test\n");
       const parsed = await loadDotEnvFile(root, ".env", { mutateProcessEnv: false });
 
-      expect(parsed.DIFFGUARD_LLM_MODE).toBe("local-openai-api");
-      expect(process.env.DIFFGUARD_LLM_MODE).toBeUndefined();
+      expect(parsed.DIFFGUARD_EXAMPLE_MODE).toBe("test");
+      expect(process.env.DIFFGUARD_EXAMPLE_MODE).toBeUndefined();
     } finally {
       if (prevMode !== undefined) {
-        process.env.DIFFGUARD_LLM_MODE = prevMode;
+        process.env.DIFFGUARD_EXAMPLE_MODE = prevMode;
       }
       await rm(root, { recursive: true, force: true });
     }

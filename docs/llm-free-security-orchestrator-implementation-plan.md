@@ -205,7 +205,7 @@ Phase 0 の非交渉事項:
 作業:
 
 1. package 名を決める。
-   - 推奨: `@ugnoguchi/diffguard`
+   - 推奨: `@ugnoguchigxp/diffguard`
 2. package metadata を整える。
    - `private: false`
    - `license`
@@ -665,7 +665,7 @@ DiffGuard は、model、daemon、API key なしでも簡単に install して使
 理想的な利用体験:
 
 ```bash
-npx @ugnoguchi/diffguard review --base main --head HEAD
+npx @ugnoguchigxp/diffguard review --base main --head HEAD
 ```
 
 出力されるもの:

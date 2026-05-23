@@ -263,45 +263,6 @@ describe("reviewDiff", () => {
     }
   });
 
-  it("attaches llm result when llm is enabled", async () => {
-    const workspaceRoot = await createTempWorkspace();
-
-    try {
-      const servicePath = path.join(workspaceRoot, "src/service.ts");
-      await writeFile(servicePath, "export const value = 1;\n");
-
-      const diff = [
-        "diff --git a/src/service.ts b/src/service.ts",
-        "--- a/src/service.ts",
-        "+++ b/src/service.ts",
-        "@@ -1,1 +1,1 @@",
-        "-export const value = 0;",
-        "+export const value = 1;",
-      ].join("\n");
-
-      const result = await reviewDiff(
-        {
-          diff,
-          files: ["src/service.ts"],
-        },
-        {
-          workspaceRoot,
-          sourceFilePaths: [servicePath],
-          enableLlm: true,
-          llmClient: async () => ({
-            summary: "LLM summary",
-            concerns: ["concern-1"],
-          }),
-        },
-      );
-
-      expect(result.llm?.summary).toBe("LLM summary");
-      expect(result.llm?.concerns).toEqual(["concern-1"]);
-    } finally {
-      await rm(workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
   it("aggregates issues across multiple files", async () => {
     const workspaceRoot = await createTempWorkspace();
 
@@ -402,52 +363,6 @@ describe("reviewDiff", () => {
       expect(result.issues.some((issue) => issue.type === "di-violation")).toBe(true);
       expect(result.blocking).toBe(true);
       expect(result.risk).toBe("high");
-    } finally {
-      await rm(workspaceRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("builds llm relatedCode using selector candidates", async () => {
-    const workspaceRoot = await createTempWorkspace();
-
-    try {
-      const servicePath = path.join(workspaceRoot, "src/service.ts");
-      await writeFile(servicePath, "export const value = 1;\n");
-
-      const diff = [
-        "diff --git a/src/service.ts b/src/service.ts",
-        "--- a/src/service.ts",
-        "+++ b/src/service.ts",
-        "@@ -1,1 +1,1 @@",
-        "-export const value = 0;",
-        "+export const value = 1;",
-      ].join("\n");
-
-      let relatedCodeFromLlmInput = "";
-      await reviewDiff(
-        {
-          diff,
-          files: ["src/service.ts"],
-        },
-        {
-          workspaceRoot,
-          sourceFilePaths: [servicePath],
-          enableLlm: true,
-          relatedCodeCandidates: [
-            { id: "a", content: "const unrelated = true;" },
-            { id: "b", content: "export const value = 1;" },
-          ],
-          llmClient: async (input) => {
-            relatedCodeFromLlmInput = input.relatedCode;
-            return {
-              summary: "ok",
-              concerns: [],
-            };
-          },
-        },
-      );
-
-      expect(relatedCodeFromLlmInput).toContain("export const value = 1;");
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }

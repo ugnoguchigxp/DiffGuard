@@ -1,16 +1,9 @@
 import { analyzeDiff } from "../analyzer/diffAnalyzer";
 import { matchesGlob, normalizePathForMatch } from "../config/pattern";
-import { DEFAULT_RELATED_CODE_LIMIT, MIN_RELATED_CODE_SCORE } from "../constants/embedding";
 import { DEFAULT_CACHE_MAX_ENTRIES, REVIEW_SCHEMA_VERSION } from "../constants/review";
 import { buildContext } from "../context/contextBuilder";
 import { buildReviewResultContext, mergeReviewRequestContext } from "../context/requestContext";
-import {
-  type CodeCandidate,
-  type ScoredCodeCandidate,
-  selectRelatedCode,
-} from "../embedding/relatedCodeSelector";
 import { LruCache } from "../engine/cache";
-import { type GemmaReviewInput, reviewWithGemma } from "../llm/gemmaClient";
 import { DEFAULT_RULES, runRules } from "../rules";
 import { REACT_RULES, TANSTACK_QUERY_RULES } from "../rules/frameworkRules";
 import {
@@ -27,7 +20,6 @@ import type {
   GnosisMemoryHint,
   Issue,
   IssueMetadata,
-  LlmReview,
   ReviewBatchCandidateScore,
   ReviewBatchResult,
   ReviewInput,
@@ -390,18 +382,6 @@ export const buildMemoryHints = (
 export interface ReviewEngineOptions {
   workspaceRoot?: string;
   sourceFilePaths?: string[];
-  enableLlm?: boolean;
-  llmRelatedCode?: string;
-  relatedCodeCandidates?: CodeCandidate[];
-  relatedCodeLimit?: number;
-  relatedCodeMinScore?: number;
-  relatedCodeSelector?: (
-    query: string,
-    candidates: CodeCandidate[],
-    limit: number,
-    minScore: number,
-  ) => ScoredCodeCandidate[];
-  llmClient?: (input: GemmaReviewInput) => Promise<LlmReview>;
   config?: DiffGuardConfig;
   pluginRules?: Rule[];
   rules?: Rule[];
@@ -507,27 +487,6 @@ export const reviewDiff = async (
 
   if (options.emitMemoryHints) {
     result.memoryHints = buildMemoryHints(findings, resultContext);
-  }
-
-  if (options.enableLlm) {
-    const llmClient = options.llmClient ?? reviewWithGemma;
-    const relatedCode = options.llmRelatedCode
-      ? options.llmRelatedCode
-      : options.relatedCodeCandidates && options.relatedCodeCandidates.length > 0
-        ? (options.relatedCodeSelector ?? selectRelatedCode)(
-            validatedInput.diff,
-            options.relatedCodeCandidates,
-            options.relatedCodeLimit ?? DEFAULT_RELATED_CODE_LIMIT,
-            options.relatedCodeMinScore ?? MIN_RELATED_CODE_SCORE,
-          )
-            .map((candidate) => candidate.content)
-            .join("\n\n")
-        : "";
-    const llm = await llmClient({
-      diff: validatedInput.diff,
-      relatedCode,
-    });
-    result.llm = llm;
   }
 
   return reviewResultSchema.parse(result);

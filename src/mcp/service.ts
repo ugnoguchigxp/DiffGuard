@@ -3,36 +3,28 @@ import path from "node:path";
 import { z } from "zod";
 
 import { analyzeDiff } from "../analyzer/diffAnalyzer";
-import { loadDotEnvFile } from "../config/dotenv";
-import { resolveLlmRuntimeSettings } from "../config/llmRuntime";
 import { loadDiffGuardConfig } from "../config/loader";
 import { REVIEW_SCHEMA_VERSION } from "../constants/review";
 import { mergeReviewRequestContext, mergeReviewRequestContexts } from "../context/requestContext";
 import { reviewBatch, reviewBatchCandidates, reviewDiff } from "../engine/reviewEngine";
-import { reviewWithGemma } from "../llm/gemmaClient";
-import { reviewWithLocalOpenAi } from "../llm/localOpenAiClient";
-import { generateFixWithLocalOpenAi } from "../llm/patchGenerator";
 import { toSarif } from "../output/sarif";
 import { loadPluginRules } from "../plugins/loader";
 import {
   astmendOperationMetadataSchema,
   reviewRequestContextSchema,
 } from "../schema/review.schema";
-import type { DiffGuardConfig, LlmReview, ReviewInput, Rule } from "../types";
+import type { DiffGuardConfig, ReviewInput, Rule } from "../types";
 
 interface RuntimeOptions {
   workspaceRoot?: string;
   configPath?: string;
   pluginPaths?: string[];
-  enableLlm?: boolean;
 }
 
 interface RuntimeContext {
   workspaceRoot: string;
   config: DiffGuardConfig;
   pluginRules: Rule[];
-  enableLlm: boolean;
-  llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
 }
 
 export interface DiffGuardMcpServiceOptions {
@@ -77,8 +69,6 @@ const reviewDiffInputSchema = {
   sourceFilePaths: z.array(z.string().min(1)).optional(),
   configPath: z.string().min(1).optional(),
   pluginPaths: z.array(z.string().min(1)).optional(),
-  llmRelatedCode: z.string().optional(),
-  enableLlm: z.boolean().optional(),
   context: reviewRequestContextSchema.optional(),
   astmendOperations: z.array(astmendOperationMetadataSchema).optional(),
   emitMemoryHints: z.boolean().optional(),
@@ -100,27 +90,11 @@ const reviewBatchInputSchema = {
   workspaceRoot: z.string().min(1).optional(),
   configPath: z.string().min(1).optional(),
   pluginPaths: z.array(z.string().min(1)).optional(),
-  llmRelatedCode: z.string().optional(),
-  enableLlm: z.boolean().optional(),
   context: reviewRequestContextSchema.optional(),
   astmendOperations: z.array(astmendOperationMetadataSchema).optional(),
   emitMemoryHints: z.boolean().optional(),
   compareCandidates: z.boolean().optional(),
   format: z.enum(["json", "sarif"]).optional(),
-} satisfies z.ZodRawShape;
-
-const generateFixInputSchema = {
-  diff: z.string().min(1),
-  finding: z.object({
-    id: z.string(),
-    ruleId: z.string(),
-    message: z.string(),
-    file: z.string().optional(),
-    line: z.number().optional(),
-    symbol: z.string().optional(),
-  }),
-  workspaceRoot: z.string().min(1).optional(),
-  configPath: z.string().min(1).optional(),
 } satisfies z.ZodRawShape;
 
 const TOOL_DEFINITIONS: DiffGuardMcpToolDefinition[] = [
@@ -133,8 +107,7 @@ const TOOL_DEFINITIONS: DiffGuardMcpToolDefinition[] = [
   {
     name: "review_diff",
     title: "Review Diff",
-    description:
-      "Run DiffGuard deterministic review (and optional local LLM review) against unified diff.",
+    description: "Run DiffGuard deterministic review against unified diff.",
     inputSchema: reviewDiffInputSchema,
   },
   {
@@ -142,12 +115,6 @@ const TOOL_DEFINITIONS: DiffGuardMcpToolDefinition[] = [
     title: "Review Batch",
     description: "Run DiffGuard review in batch for multiple diffs.",
     inputSchema: reviewBatchInputSchema,
-  },
-  {
-    name: "generate_fix",
-    title: "Generate Fix",
-    description: "Generate an AI-driven fix (unified diff) for a specific finding using local LLM.",
-    inputSchema: generateFixInputSchema,
   },
 ];
 
@@ -197,34 +164,7 @@ const mergeConfig = (
       ...(base.cache ?? {}),
       ...(overrides.cache ?? {}),
     },
-    llm: {
-      ...(base.llm ?? {}),
-      ...(overrides.llm ?? {}),
-    },
   };
-};
-
-const createLlmClient = (
-  settings: ReturnType<typeof resolveLlmRuntimeSettings>,
-): ((input: { diff: string; relatedCode: string }) => Promise<LlmReview>) => {
-  if (settings.mode === "local-openai-api") {
-    return (input) =>
-      reviewWithLocalOpenAi(input, {
-        baseUrl: settings.apiBaseUrl,
-        model: settings.model,
-        timeoutMs: settings.timeoutMs,
-        maxTokens: settings.maxTokens,
-        temperature: settings.temperature,
-      });
-  }
-
-  return (input) =>
-    reviewWithGemma(input, {
-      command: settings.command,
-      timeoutMs: settings.timeoutMs,
-      noSession: settings.noSession,
-      ...(settings.sessionDir ? { sessionDir: settings.sessionDir } : {}),
-    });
 };
 
 const resolveWorkspaceRoot = (
@@ -269,7 +209,6 @@ const buildRuntimeContext = async (
   serviceOptions: DiffGuardMcpServiceOptions,
 ): Promise<RuntimeContext> => {
   const workspaceRoot = resolveWorkspaceRoot(runtimeOptions.workspaceRoot, serviceOptions);
-  const dotenv = await loadDotEnvFile(workspaceRoot, ".env", { mutateProcessEnv: false });
 
   const loadedConfig = await loadDiffGuardConfig(workspaceRoot, runtimeOptions.configPath);
   const effectiveConfig = mergeConfig(loadedConfig.config, {
@@ -278,14 +217,6 @@ const buildRuntimeContext = async (
       : {}),
   });
 
-  const llmSettings = resolveLlmRuntimeSettings(
-    effectiveConfig,
-    runtimeOptions.enableLlm ?? false,
-    {
-      ...dotenv,
-      ...process.env,
-    },
-  );
   const pluginRules = effectiveConfig.plugins
     ? await loadPluginRules(effectiveConfig.plugins, workspaceRoot)
     : [];
@@ -294,8 +225,6 @@ const buildRuntimeContext = async (
     workspaceRoot,
     config: effectiveConfig,
     pluginRules,
-    enableLlm: llmSettings.enabled,
-    ...(llmSettings.enabled ? { llmClient: createLlmClient(llmSettings) } : {}),
   };
 };
 
@@ -308,12 +237,16 @@ const reviewDiffTool = async (
       ...(args.workspaceRoot ? { workspaceRoot: args.workspaceRoot } : {}),
       ...(args.configPath ? { configPath: args.configPath } : {}),
       ...(args.pluginPaths ? { pluginPaths: args.pluginPaths } : {}),
-      ...(typeof args.enableLlm === "boolean" ? { enableLlm: args.enableLlm } : {}),
     },
     serviceOptions,
   );
 
-  const files = args.files && args.files.length > 0 ? args.files : inferFilesFromDiff(args.diff);
+  const files =
+    args.files && args.files.length > 0
+      ? args.files
+      : args.sourceFilePaths && args.sourceFilePaths.length > 0
+        ? args.sourceFilePaths
+        : inferFilesFromDiff(args.diff);
   if (files.length === 0) {
     return toToolError(
       "Source files are required. Provide files or include paths in diff headers.",
@@ -331,9 +264,6 @@ const reviewDiffTool = async (
     {
       workspaceRoot: runtime.workspaceRoot,
       ...(args.sourceFilePaths ? { sourceFilePaths: args.sourceFilePaths } : {}),
-      enableLlm: runtime.enableLlm,
-      ...(runtime.llmClient ? { llmClient: runtime.llmClient } : {}),
-      ...(args.llmRelatedCode ? { llmRelatedCode: args.llmRelatedCode } : {}),
       config: runtime.config,
       pluginRules: runtime.pluginRules,
       emitMemoryHints: args.emitMemoryHints ?? false,
@@ -357,7 +287,6 @@ const reviewBatchTool = async (
       ...(args.workspaceRoot ? { workspaceRoot: args.workspaceRoot } : {}),
       ...(args.configPath ? { configPath: args.configPath } : {}),
       ...(args.pluginPaths ? { pluginPaths: args.pluginPaths } : {}),
-      ...(typeof args.enableLlm === "boolean" ? { enableLlm: args.enableLlm } : {}),
     },
     serviceOptions,
   );
@@ -388,9 +317,6 @@ const reviewBatchTool = async (
 
   const reviewOptions = {
     workspaceRoot: runtime.workspaceRoot,
-    enableLlm: runtime.enableLlm,
-    ...(runtime.llmClient ? { llmClient: runtime.llmClient } : {}),
-    ...(args.llmRelatedCode ? { llmRelatedCode: args.llmRelatedCode } : {}),
     config: runtime.config,
     pluginRules: runtime.pluginRules,
     emitMemoryHints: args.emitMemoryHints ?? false,
@@ -452,53 +378,6 @@ export const createDiffGuardMcpService = (
             z.object(reviewBatchInputSchema).parse(args),
             serviceOptions,
           );
-        }
-
-        if (name === "generate_fix") {
-          const argsObj = z.object(generateFixInputSchema).parse(args);
-          const runtime = await buildRuntimeContext(
-            {
-              ...(argsObj.workspaceRoot ? { workspaceRoot: argsObj.workspaceRoot } : {}),
-              ...(argsObj.configPath ? { configPath: argsObj.configPath } : {}),
-              enableLlm: true, // Fix generation always requires LLM
-            },
-            serviceOptions,
-          );
-
-          if (!runtime.llmClient) {
-            return toToolError("LLM is not enabled or configured correctly.");
-          }
-
-          // We need LocalOpenAiClientOptions for generateFixWithLocalOpenAi
-          // Since buildRuntimeContext encapsulates the client, we might need a way to get settings
-          // For now, let's re-resolve settings or use a simplified approach
-          const dotenv = await loadDotEnvFile(runtime.workspaceRoot, ".env", { mutateProcessEnv: false });
-          const llmSettings = resolveLlmRuntimeSettings(runtime.config, true, { ...dotenv, ...process.env });
-
-          if (llmSettings.mode !== "local-openai-api") {
-            return toToolError("generate_fix currently requires local-openai-api mode (daemon API).");
-          }
-
-          if (!argsObj.finding.file || !argsObj.finding.line) {
-            return toToolError("finding.file and finding.line are required to generate a fix.");
-          }
-
-          const fix = await generateFixWithLocalOpenAi(
-            {
-              diff: argsObj.diff,
-              finding: argsObj.finding,
-              workspaceRoot: runtime.workspaceRoot,
-            },
-            {
-              baseUrl: llmSettings.apiBaseUrl,
-              model: llmSettings.model,
-              timeoutMs: llmSettings.timeoutMs,
-              maxTokens: llmSettings.maxTokens,
-              temperature: llmSettings.temperature,
-            },
-          );
-
-          return toToolResult({ fix });
         }
 
         return toToolError(`Unknown MCP tool: ${name}`);

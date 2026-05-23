@@ -119,11 +119,6 @@ export const levelCountsSchema = z.object({
   info: z.number().int().nonnegative(),
 });
 
-export const llmReviewSchema = z.object({
-  summary: z.string(),
-  concerns: z.array(z.string()),
-});
-
 export const reviewResultContextSchema = z.object({
   proposalId: z.string().min(1).optional(),
   patchPlanId: z.string().min(1).optional(),
@@ -164,7 +159,6 @@ export const reviewResultSchema = z.object({
   }),
   findings: z.array(findingSchema).default([]),
   issues: z.array(issueSchema),
-  llm: llmReviewSchema.optional(),
   context: reviewResultContextSchema.optional(),
   memoryHints: z.array(gnosisMemoryHintSchema).optional(),
 });
@@ -191,44 +185,34 @@ const suppressionConfigSchema = z.object({
   expiresOn: z.string().min(1).optional(),
 });
 
-export const diffGuardConfigSchema = z.object({
-  failOn: z.enum(["none", "warn", "error"]).optional(),
-  outputFormat: z.enum(["json", "sarif"]).optional(),
-  rules: z.record(z.string().min(1), ruleConfigSchema).optional(),
-  excludePaths: z.array(z.string().min(1)).optional(),
-  suppressions: z.array(suppressionConfigSchema).optional(),
-  plugins: z.array(z.string().min(1)).optional(),
-  cache: z
-    .object({
-      enabled: z.boolean().optional(),
-      maxEntries: z.number().int().positive().optional(),
-    })
-    .optional(),
-  semantic: z
-    .object({
-      enabled: z.boolean().optional(),
-      maxFiles: z.number().int().positive().optional(),
-      timeoutMs: z.number().int().positive().optional(),
-    })
-    .optional(),
-  frameworkRules: z
-    .object({
-      react: z.boolean().optional(),
-      tanstackQuery: z.boolean().optional(),
-    })
-    .optional(),
-  llm: z
-    .object({
-      enabled: z.boolean().optional(),
-      mode: z.enum(["gemma-command", "local-openai-api"]).optional(),
-      command: z.string().min(1).optional(),
-      timeoutMs: z.number().int().positive().optional(),
-      sessionDir: z.string().min(1).optional(),
-      noSession: z.boolean().optional(),
-      apiBaseUrl: z.string().url().optional(),
-      model: z.string().min(1).optional(),
-      maxTokens: z.number().int().positive().optional(),
-      temperature: z.number().min(0).max(2).optional(),
-    })
-    .optional(),
-});
+export const diffGuardConfigSchema = z
+  .object({
+    failOn: z.enum(["none", "warn", "error"]).optional(),
+    outputFormat: z.enum(["json", "sarif"]).optional(),
+    rules: z.record(z.string().min(1), ruleConfigSchema).optional(),
+    excludePaths: z.array(z.string().min(1)).optional(),
+    suppressions: z.array(suppressionConfigSchema).optional(),
+    plugins: z.array(z.string().min(1)).optional(),
+    cache: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxEntries: z.number().int().positive().optional(),
+      })
+      .optional(),
+    semantic: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxFiles: z.number().int().positive().optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .optional(),
+    frameworkRules: z
+      .object({
+        react: z.boolean().optional(),
+        tanstackQuery: z.boolean().optional(),
+      })
+      .optional(),
+    // Legacy LLM config is explicitly rejected while other unknown keys remain forward-compatible.
+    llm: z.never().optional(),
+  })
+  .strip();

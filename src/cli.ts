@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { analyzeDiff } from "./analyzer/diffAnalyzer";
 import { loadDotEnvFile } from "./config/dotenv";
-import { resolveLlmRuntimeSettings } from "./config/llmRuntime";
 import { loadDiffGuardConfig } from "./config/loader";
 import { DEFAULT_FAIL_ON, DEFAULT_OUTPUT_FORMAT, REVIEW_SCHEMA_VERSION } from "./constants/review";
 import {
@@ -14,15 +14,12 @@ import {
   parseReviewRequestContext,
 } from "./context/requestContext";
 import { reviewBatch, reviewBatchCandidates, reviewDiff } from "./engine/reviewEngine";
-import { reviewWithGemma } from "./llm/gemmaClient";
-import { reviewWithLocalOpenAi } from "./llm/localOpenAiClient";
 import { toSarif } from "./output/sarif";
 import { loadPluginRules } from "./plugins/loader";
 
 import type {
   DiffAnalysis,
   DiffGuardConfig,
-  LlmReview,
   ReviewBatchResult,
   ReviewInput,
   ReviewRequestContext,
@@ -34,9 +31,9 @@ const USAGE_TEXT = [
   "DiffGuard CLI",
   "",
   "Usage:",
-  "  diffguard --diff-file <path> [--files <a,b,c>] [--workspace-root <path>] [--enable-llm]",
-  "  diffguard --diff <text> [--file <path> ...] [--workspace-root <path>] [--enable-llm]",
-  "  cat change.diff | diffguard [--workspace-root <path>] [--enable-llm]",
+  "  diffguard --diff-file <path> [--files <a,b,c>] [--workspace-root <path>]",
+  "  diffguard --diff <text> [--file <path> ...] [--workspace-root <path>]",
+  "  cat change.diff | diffguard [--workspace-root <path>]",
   "  diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]",
   "",
   "Options:",
@@ -47,11 +44,9 @@ const USAGE_TEXT = [
   "  --files <csv>                Comma separated source file paths",
   "  --file <path>                Single source file path (repeatable)",
   "  --workspace-root <path>      Workspace root for source resolution",
-  "  --enable-llm                 Force-enable local LLM review",
   "  --context-file <path>        Read review request context JSON",
   "  --astmend-ops-file <path>    Read Astmend operation metadata JSON array",
   "  --emit-memory-hints          Include Gnosis-ready memory hint payloads",
-  "  --llm-related-code-file <p>  Related code text for LLM prompt",
   "  --config <path>              Load diffguard.config from explicit path",
   "  --plugin <path>              Additional plugin module path (repeatable)",
   "  --fail-on <none|warn|error>  Exit code 2 when matched severity exists",
@@ -67,12 +62,10 @@ interface CliArgs {
   batchFile?: string;
   files: string[];
   workspaceRoot?: string;
-  enableLlm: boolean;
   emitMemoryHints: boolean;
   compareCandidates: boolean;
   contextFile?: string;
   astmendOpsFile?: string;
-  llmRelatedCodeFile?: string;
   configFile?: string;
   plugins: string[];
   failOn?: "none" | "warn" | "error";
@@ -94,9 +87,6 @@ interface CliDependencies {
     options?: {
       workspaceRoot?: string;
       sourceFilePaths?: string[];
-      enableLlm?: boolean;
-      llmRelatedCode?: string;
-      llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
       config?: DiffGuardConfig;
       pluginRules?: Rule[];
       emitMemoryHints?: boolean;
@@ -106,9 +96,6 @@ interface CliDependencies {
     inputs: ReviewInput[],
     options?: {
       workspaceRoot?: string;
-      enableLlm?: boolean;
-      llmRelatedCode?: string;
-      llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
       config?: DiffGuardConfig;
       pluginRules?: Rule[];
       emitMemoryHints?: boolean;
@@ -118,9 +105,6 @@ interface CliDependencies {
     inputs: ReviewInput[],
     options?: {
       workspaceRoot?: string;
-      enableLlm?: boolean;
-      llmRelatedCode?: string;
-      llmClient?: (input: { diff: string; relatedCode: string }) => Promise<LlmReview>;
       config?: DiffGuardConfig;
       pluginRules?: Rule[];
       emitMemoryHints?: boolean;
@@ -208,7 +192,6 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
   const result: CliArgs = {
     help: false,
     files: [],
-    enableLlm: false,
     emitMemoryHints: false,
     compareCandidates: false,
     plugins: [],
@@ -219,11 +202,6 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       result.help = true;
-      continue;
-    }
-
-    if (arg === "--enable-llm") {
-      result.enableLlm = true;
       continue;
     }
 
@@ -286,12 +264,6 @@ export const parseCliArgs = (argv: string[]): CliArgs => {
 
     if (arg === "--astmend-ops-file") {
       result.astmendOpsFile = requireNextValue(argv, index, "--astmend-ops-file");
-      index += 1;
-      continue;
-    }
-
-    if (arg === "--llm-related-code-file") {
-      result.llmRelatedCodeFile = requireNextValue(argv, index, "--llm-related-code-file");
       index += 1;
       continue;
     }
@@ -369,34 +341,7 @@ const mergeConfig = (
       ...(base.cache ?? {}),
       ...(overrides.cache ?? {}),
     },
-    llm: {
-      ...(base.llm ?? {}),
-      ...(overrides.llm ?? {}),
-    },
   };
-};
-
-const createLlmClient = (
-  settings: ReturnType<typeof resolveLlmRuntimeSettings>,
-): ((input: { diff: string; relatedCode: string }) => Promise<LlmReview>) => {
-  if (settings.mode === "local-openai-api") {
-    return (input) =>
-      reviewWithLocalOpenAi(input, {
-        baseUrl: settings.apiBaseUrl,
-        model: settings.model,
-        timeoutMs: settings.timeoutMs,
-        maxTokens: settings.maxTokens,
-        temperature: settings.temperature,
-      });
-  }
-
-  return (input) =>
-    reviewWithGemma(input, {
-      command: settings.command,
-      timeoutMs: settings.timeoutMs,
-      noSession: settings.noSession,
-      ...(settings.sessionDir ? { sessionDir: settings.sessionDir } : {}),
-    });
 };
 
 const parseBatchInput = (raw: string): ReviewInput[] => {
@@ -507,11 +452,7 @@ export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<
 
     const failOn = effectiveConfig.failOn ?? DEFAULT_FAIL_ON;
     const format = effectiveConfig.outputFormat ?? DEFAULT_OUTPUT_FORMAT;
-    const llmSettings = resolveLlmRuntimeSettings(effectiveConfig, args.enableLlm);
 
-    const llmRelatedCode = args.llmRelatedCodeFile
-      ? await dependencies.readTextFile(args.llmRelatedCodeFile)
-      : undefined;
     const requestContext = await readReviewRequestContext(args, dependencies);
 
     const pluginRules = effectiveConfig.plugins
@@ -520,9 +461,6 @@ export const runCli = async (overrides: Partial<CliDependencies> = {}): Promise<
 
     const reviewOptions = {
       workspaceRoot,
-      enableLlm: llmSettings.enabled,
-      ...(llmSettings.enabled ? { llmClient: createLlmClient(llmSettings) } : {}),
-      ...(llmRelatedCode ? { llmRelatedCode } : {}),
       config: effectiveConfig,
       pluginRules,
       emitMemoryHints: args.emitMemoryHints,
@@ -597,7 +535,11 @@ const isExecutedDirectly = (): boolean => {
     return false;
   }
 
-  return pathToFileURL(entry).href === import.meta.url;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return pathToFileURL(entry).href === import.meta.url;
+  }
 };
 
 if (isExecutedDirectly()) {

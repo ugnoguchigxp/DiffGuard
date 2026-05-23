@@ -116,13 +116,6 @@ export interface Issue {
   fix?: SuggestedFix | undefined;
 }
 
-export interface LlmReview {
-  summary: string;
-  concerns: string[];
-}
-
-export type LlmMode = "gemma-command" | "local-openai-api";
-
 export interface Finding {
   id: string;
   level: Severity;
@@ -142,7 +135,6 @@ export interface ReviewResult {
   levelCounts: Record<Severity, number>;
   findings: Finding[];
   issues: Issue[];
-  llm?: LlmReview | undefined;
   context?:
     | {
         proposalId?: string | undefined;
@@ -277,20 +269,6 @@ export interface DiffGuardConfig {
     | {
         react?: boolean | undefined;
         tanstackQuery?: boolean | undefined;
-      }
-    | undefined;
-  llm?:
-    | {
-        enabled?: boolean | undefined;
-        mode?: LlmMode | undefined;
-        command?: string | undefined;
-        timeoutMs?: number | undefined;
-        sessionDir?: string | undefined;
-        noSession?: boolean | undefined;
-        apiBaseUrl?: string | undefined;
-        model?: string | undefined;
-        maxTokens?: number | undefined;
-        temperature?: number | undefined;
       }
     | undefined;
 }

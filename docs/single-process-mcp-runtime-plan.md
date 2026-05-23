@@ -1,176 +1,163 @@
-# Single-Process MCP Runtime Plan
+# 共有MCPホスト統合計画（単一プロセス運用）
 
-## Goal
+## 目的
 
-diffGuard should be hosted inside the shared local MCP host instead of running
-as an independent long-lived Codex-spawned Bun stdio server.
+diffGuard を独立した長寿命 `bun` stdio プロセスとして常駐させず、共有ローカル MCP ホストの in-process サービスとして動かす。
 
-Target steady state:
+目標状態:
 
-- The shared host process loads diffGuard tools in-process.
-- Codex no longer starts `bun run src/mcp/server.ts` for diffGuard directly.
-- Direct stdio mode remains available only as a development fallback.
+- 共有ホストが diffGuard の tool 群を直接ロードする。
+- Codex から `bun run src/mcp/server.ts` を常時起動しない。
+- 直接 stdio 起動は開発・デバッグ時の fallback のみ残す。
 
-## Current State
+## 現状
 
-Current MCP entrypoint:
+現在の MCP エントリポイント:
 
 - `src/mcp/server.ts`
 - `package.json` scripts:
   - `mcp`: `PATH="$HOME/.bun/bin:$PATH" bun run src/mcp/server.ts`
 
-The file already has `createMcpServer()`, but runtime context construction,
-configuration loading, optional LLM setup, and tool handlers are coupled to the
-SDK server registration. The shared host needs a transport-free service surface.
+`createMcpServer()` は存在するが、runtime context 構築、設定読み込み、tool handler 登録が密結合している。共有ホスト連携には transport 非依存の service 層を明確化する必要がある。
 
-## Architecture
+## アーキテクチャ方針
 
 ```text
 shared MCP host process
   -> import diffGuard service factory
-      -> diff analysis and review tools
-      -> deterministic rules
-      -> optional LLM client per call
+      -> diff analysis / review tools
+      -> deterministic rules only
 
 dev-only direct mode
   -> src/mcp/server.ts
       -> StdioServerTransport
 ```
 
-The service must be safe to load into a host that also runs other MCP services.
-It should not mutate global state, start timers, or assume that `process.cwd()`
-is always the target workspace.
+サービス import 時に以下をしないこと:
 
-## Implementation Plan
+- グローバル状態の破壊的変更
+- バックグラウンド timer 起動
+- `process.cwd()` を常に workspace root とみなす前提
 
-### Phase 1: Extract Transport-Free Service
+## 実装ステップ
 
-Files:
+### Phase 1: Transport 非依存 Service の確立
+
+対象:
 
 - `src/mcp/server.ts`
 - `src/mcp/service.ts`
 - `src/index.ts`
-- MCP-related tests
+- MCP 関連テスト
 
-Tasks:
+作業:
 
-1. Create a `createDiffGuardMcpService()` module that returns:
-   - service metadata;
-   - tool definitions;
-   - `callTool(name, args)`.
-2. Keep `createMcpServer()` as a compatibility wrapper that registers the
-   service tools into the SDK `McpServer`.
-3. Ensure importing the service has no stdio side effects.
+1. `createDiffGuardMcpService()` を公開し、以下を返す。
+   - service metadata
+   - tool definitions
+   - `callTool(name, args)`
+2. `createMcpServer()` は互換ラッパーとして残し、SDK `McpServer` 登録のみを担当させる。
+3. service import 時に stdio 副作用が発生しないことを保証する。
 
-Acceptance:
+受け入れ:
 
-- Direct `bun run src/mcp/server.ts` still works.
-- The service can be imported in a unit test and called without stdio.
-- Existing tool names and schemas stay stable.
+- `bun run src/mcp/server.ts` は従来どおり動く。
+- unit test から stdio なしで service を import / call できる。
+- tool 名と schema 契約は維持される。
 
-### Phase 2: Make Runtime Context Explicit Per Call
+### Phase 2: Runtime Context を call 単位で明示
 
-Files:
+対象:
 
 - `src/mcp/service.ts`
 - `src/config/loader.ts`
-- `src/config/llmRuntime.ts`
 - `src/engine/reviewEngine.ts`
 
-Tasks:
+作業:
 
-1. Require `workspaceRoot` in host-facing calls when file or config resolution
-   matters.
-2. Keep `process.cwd()` only as a direct-stdio fallback default.
-3. Cache config carefully, keyed by `workspaceRoot + configPath + pluginPaths`,
-   or avoid caching until correctness is proven.
-4. Ensure optional LLM clients are created per effective runtime settings and do
-   not leak subprocesses.
+1. path 解決が必要な call では `workspaceRoot` を受け取る。
+2. `process.cwd()` は direct stdio 実行時 fallback のみで使う。
+3. config cache は `workspaceRoot + configPath + pluginPaths` 単位で分離するか、正しさを確認できるまで無効化する。
 
-Acceptance:
+受け入れ:
 
-- Host calls against different workspaces do not cross-contaminate config.
-- `review_diff` and `review_batch` resolve plugin/config paths from the provided
-  workspace root.
-- LLM-disabled default remains deterministic and fast.
+- 異なる workspace の呼び出しで config が混線しない。
+- `review_diff` / `review_batch` が入力 `workspaceRoot` 基準で plugin/config を解決する。
+- 実行は決定論的で、不要な runtime 依存を増やさない。
 
-### Phase 3: Keep Direct Stdio as Fallback
+### Phase 3: Direct Stdio を fallback として維持
 
-Files:
+対象:
 
 - `src/mcp/server.ts`
 - `README.md`
 - `package.json`
 
-Tasks:
+作業:
 
-1. Keep `bun run mcp` as a direct debug command.
-2. Document that Codex should use the shared host adapter after migration.
-3. Add direct-mode shutdown handling for stdin close, transport close, and idle
-   timeout if the SDK transport does not exit reliably by itself.
+1. `bun run mcp` をローカルデバッグ用途として残す。
+2. 共有ホスト経由が推奨経路であることを README に明記する。
+3. transport 切断時に direct mode が確実に終了するよう、終了処理を確認・補強する。
 
-Acceptance:
+受け入れ:
 
-- Repeated direct-mode starts do not leave old `bun run src/mcp/server.ts`
-  processes.
-- Direct debug mode exits cleanly after client disconnect.
+- direct mode を繰り返し起動しても stale process が残らない。
+- client disconnect 後に clean exit する。
 
-### Phase 4: Integration With Shared Host
+### Phase 4: 共有ホスト統合
 
-Files:
+対象:
 
-- diffGuard exports in this repo.
-- Gnosis host integration files in `/Users/y.noguchi/Code/gnosis`.
+- このリポジトリの export 面
+- `/Users/y.noguchi/Code/gnosis` 側の host integration
 
-Tasks:
+作業:
 
-1. Provide a stable import path for the host, such as package root export or
-   `dist/mcp/service.js`.
-2. Confirm the host can call:
+1. 共有ホスト向けの安定 import path を提供する。
+   - 例: package root export、`dist/mcp/service.js`
+2. 共有ホスト経由で以下を呼べることを確認する。
    - `analyze_diff`
    - `review_diff`
    - `review_batch`
-3. Preserve machine-readable `structuredContent` and JSON text output.
-4. Keep SARIF output support unchanged.
+3. `structuredContent` と JSON text output の契約を維持する。
+4. SARIF 出力サポートを維持する。
 
-Acceptance:
+受け入れ:
 
-- diffGuard tools work through the shared host.
-- Direct diffGuard MCP process is not required in `~/.codex/config.toml`.
-- No diffGuard Bun process remains after adapter disconnect.
+- shared host 経由で diffGuard tools が実行できる。
+- `~/.codex/config.toml` で diffGuard 専用 stdio 常駐が不要になる。
+- adapter disconnect 後に diffGuard 専用 `bun` プロセスが残らない。
 
-## Watchdog Position
+## Watchdog 方針
 
-diffGuard should not own a watchdog. Its direct runtime should clean itself up,
-and the shared host should own process-level diagnostics.
+diffGuard 自身は watchdog を持たない。プロセス監視は共有ホスト側で管理する。
 
-The shared watchdog can remain useful for:
+共有 watchdog が担う責務:
 
-- detecting accidentally configured direct diffGuard stdio processes;
-- cleaning stale adapter processes after client crashes;
-- reporting multiple host processes.
+- 誤設定で起動した direct stdio プロセス検知
+- client crash 後の stale adapter process cleanup
+- 複数 host process の可視化
 
-If watchdog cleanup becomes part of the normal happy path, the host/adapter
-lifecycle is still incomplete.
+watchdog cleanup が通常経路で必須になる場合、host/adapter lifecycle が未完成と判断する。
 
-## Validation Commands
+## 検証コマンド
 
-Run from `/Users/y.noguchi/Code/diffGuard`:
+`/Users/y.noguchi/Code/diffGuard` で実行:
 
 ```bash
-bun run typecheck
-bun run lint
-bun run test
-bun run build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
 ```
 
-Host integration smoke, run after shared host support exists:
+共有ホスト統合後のスモーク:
 
 ```bash
-node -e "import('./dist/mcp/service.js').then(m => console.log(Object.keys(m)))"
+node -e "import('./dist/mcp/service.js').then((m) => console.log(Object.keys(m)))"
 ```
 
-Expected runtime state after migration:
+移行完了後の期待状態:
 
-- No long-lived `bun run src/mcp/server.ts` diffGuard process.
-- diffGuard tools are served by the shared host process.
+- 長寿命 `bun run src/mcp/server.ts` が常駐しない。
+- diffGuard tools は共有ホストプロセスから提供される。

@@ -1,7 +1,7 @@
 # DiffGuard
 
 DiffGuard は、`Astmend` が生成した差分を解析し、影響範囲とリスクを JSON/SARIF で返す差分レビューエンジンです。  
-判定は deterministic ルールを優先し、必要に応じてローカル LLM（`gemma4` / `bonsai` の CLI セッション維持実行、または OpenAI 互換 API）を補助的に利用します。
+判定は deterministic ルールを主役にし、外部モデルや API キーに依存しません。
 
 ## 現在の機能
 
@@ -41,7 +41,27 @@ DiffGuard は、`Astmend` が生成した差分を解析し、影響範囲とリ
 - `DG_REACT_001` `react-hook-conditional`: opt-in React rule pack による条件分岐内 Hook 呼び出し
 - `DG_QUERY_001` `tanstack-query-key-mismatch`: opt-in TanStack Query rule pack による `queryKey` / `queryFn` 不整合
 
-## セットアップ
+## インストール（利用者向け）
+
+グローバルインストール:
+
+```bash
+npm install -g @ugnoguchigxp/diffguard
+diffguard --help
+```
+
+都度実行:
+
+```bash
+npx @ugnoguchigxp/diffguard --help
+```
+
+補足:
+
+- npm パッケージ名は `@ugnoguchigxp/diffguard`（すべて小文字）
+- 実行コマンドは `diffguard`
+
+## 開発セットアップ
 
 ```bash
 pnpm install
@@ -51,12 +71,16 @@ pnpm test
 pnpm build
 ```
 
+公開手順チェックリスト:
+
+- [`docs/npm-public-release-checklist.md`](./docs/npm-public-release-checklist.md)
+
 ## CLI
 
 ```bash
-diffguard --diff-file <path> [--files <a,b,c>] [--workspace-root <path>] [--enable-llm]
-diffguard --diff <text> [--file <path> ...] [--workspace-root <path>] [--enable-llm]
-cat change.diff | diffguard [--workspace-root <path>] [--enable-llm]
+diffguard --diff-file <path> [--files <a,b,c>] [--workspace-root <path>]
+diffguard --diff <text> [--file <path> ...] [--workspace-root <path>]
+cat change.diff | diffguard [--workspace-root <path>]
 diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]
 ```
 
@@ -66,12 +90,10 @@ diffguard --batch-file <path> [--workspace-root <path>] [--format json|sarif]
 - `--plugin <path>`: 追加プラグインルール（複数指定可）
 - `--fail-on <none|warn|error>`: 該当 severity で終了コード `2`
 - `--format <json|sarif>`: 出力形式
-- `--enable-llm`: LLM レビューを強制有効化（`.env` / config での有効化より優先）
 - `--context-file <path>`: proposal ID / intent / `doNotExtract` などのレビュー context JSON
 - `--astmend-ops-file <path>`: Astmend operation metadata の JSON 配列
 - `--emit-memory-hints`: blocking finding から Gnosis 登録向け `memoryHints` を出力
 - `--compare-candidates`: batch 実行時に `batchSummary.recommendedCandidateId` を出力
-- `--llm-related-code-file <path>`: LLM に渡す関連コード
 - `--pretty`: 整形出力
 
 context JSON 例:
@@ -106,13 +128,13 @@ Astmend operation metadata 例:
 
 DiffGuard の MCP ツールは、共有ローカル MCP ホストから in-process に読み込める
 transport-free サービスとして公開しています。Codex などの常用環境では共有ホスト側
-から `diffguard/mcp/service` またはビルド後の `dist/mcp/service.js` を import して
+から `@ugnoguchigxp/diffguard/mcp/service` またはビルド後の `dist/mcp/service.js` を import して
 利用してください。
 
 ホスト向け import:
 
 ```ts
-import { createDiffGuardMcpService } from "diffguard/mcp/service";
+import { createDiffGuardMcpService } from "@ugnoguchigxp/diffguard/mcp/service";
 
 const service = createDiffGuardMcpService();
 await service.callTool("review_diff", {
@@ -152,7 +174,6 @@ pnpm mcp
 - `analyze_diff`: diff の変更タイプとファイル分析を返す
 - `review_diff`: 単一 diff をレビューして JSON または SARIF を返す
 - `review_batch`: 複数 diff をまとめてレビューする
-- `generate_fix`: 指定した指摘（Finding）に対する修正パッチを AI で生成する
 
 直接 stdio fallback の IDE 側設定例（MCP クライアント共通の command/args 形式）:
 
@@ -230,90 +251,6 @@ Copilot CLI では次の 2 つの方法があります。
 }
 ```
 
-## LLM 連携（gemma4 / bonsai / localLlm）
-
-### 有効化の優先順位
-
-- `--enable-llm` が指定されていれば常に有効
-- それ以外は `diffguard.config.*` の `llm.enabled`
-- それもなければ `.env` の `DIFFGUARD_ENABLE_LLM`
-
-### `.env` で有効化する例
-
-```bash
-cp .env.example .env
-```
-
-`gemma4` コマンドを使う場合（推奨）:
-
-```env
-DIFFGUARD_ENABLE_LLM=true
-DIFFGUARD_LLM_MODE=gemma-command
-DIFFGUARD_LLM_COMMAND=gemma4
-DIFFGUARD_LLM_TIMEOUT_MS=5000
-```
-
-`bonsai` コマンドを使う場合:
-
-```env
-DIFFGUARD_ENABLE_LLM=true
-DIFFGUARD_LLM_MODE=gemma-command
-DIFFGUARD_LLM_COMMAND=bonsai
-DIFFGUARD_LLM_TIMEOUT_MS=5000
-```
-
-セッション維持の制御（`gemma4` / `bonsai` 共通）:
-
-```env
-# 任意: セッション保存先を固定したい場合
-DIFFGUARD_LLM_SESSION_DIR=/absolute/path/to/sessions
-# 任意: true でセッション保存を無効化（既定は false）
-DIFFGUARD_LLM_NO_SESSION=false
-```
-
-DiffGuard は `../localLlm/README` の推奨に合わせ、`--prompt` + JSON 返却を使って `session_id` を保持し、2回目以降は `--session-id` を自動付与して継続します。
-
-`../localLlm` の OpenAI 互換 API を使う場合（任意）:
-
-```env
-DIFFGUARD_ENABLE_LLM=true
-DIFFGUARD_LLM_MODE=local-openai-api
-DIFFGUARD_LOCAL_LLM_API_BASE_URL=http://127.0.0.1:44448
-DIFFGUARD_LOCAL_LLM_MODEL=gemma-4-e4b-it
-DIFFGUARD_LOCAL_LLM_MAX_TOKENS=256
-DIFFGUARD_LOCAL_LLM_TEMPERATURE=0
-```
-
-`DIFFGUARD_LOCAL_LLM_API_BASE_URL` は次の形式を受け付けます。
-
-- `http://127.0.0.1:44448`
-- `http://127.0.0.1:44448/v1`
-- `http://127.0.0.1:44448/v1/chat/completions`
-
-### `../localLlm` 起動手順（APIモード時）
-
-```bash
-cd ../localLlm
-./scripts/run_openai_api.sh
-```
-
-`../localLlm` 側は `POST /v1/chat/completions` を提供します。DiffGuard は `local-openai-api` モード時にこのエンドポイントを呼び出します。
-
-### `diffguard.config.*` で設定する例
-
-```json
-{
-  "llm": {
-    "enabled": true,
-    "mode": "gemma-command",
-    "command": "gemma4",
-    "timeoutMs": 5000,
-    "sessionDir": "/absolute/path/to/sessions",
-    "noSession": false
-  }
-}
-```
-
 ## Opt-in 解析
 
 semantic checker と framework rule pack は default off です。必要な repo だけ `diffguard.config.*` で有効化します。
@@ -339,7 +276,7 @@ semantic checker は `workspaceRoot` と `sourceFilePaths` を使い、exported 
 Astmend の `createPatchDiff`（`Index:` 形式）をそのまま入力できます。
 
 ```bash
-cat /path/to/astmend.diff | pnpm cli -- --workspace-root /path/to/repo --fail-on warn --pretty
+cat /path/to/astmend.diff | npx @ugnoguchigxp/diffguard --workspace-root /path/to/repo --fail-on warn --pretty
 ```
 
 ## 設定ファイル例
@@ -460,7 +397,6 @@ src/
  ├─ context/
  ├─ embedding/
  ├─ engine/
- ├─ llm/
  ├─ output/
  ├─ plugins/
  ├─ rules/

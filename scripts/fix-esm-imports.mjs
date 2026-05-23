@@ -5,7 +5,7 @@ import path from "node:path";
 const targetRoot = process.argv[2] ?? "dist";
 const jsExtensionPattern = /\.[cm]?js$/;
 
-const normalizeSpecifier = (filePath: string, specifier: string): string => {
+const normalizeSpecifier = (filePath, specifier) => {
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
     return specifier;
   }
@@ -26,7 +26,7 @@ const normalizeSpecifier = (filePath: string, specifier: string): string => {
   return `${specifier}.js`;
 };
 
-const rewriteSource = (filePath: string, source: string): string => {
+const rewriteSource = (filePath, source) => {
   return source
     .replaceAll(/(from\s+["'])(\.{1,2}\/[^"']+)(["'])/g, (_match, prefix, specifier, suffix) => {
       return `${prefix}${normalizeSpecifier(filePath, specifier)}${suffix}`;
@@ -42,7 +42,7 @@ const rewriteSource = (filePath: string, source: string): string => {
     });
 };
 
-const rewriteFile = async (filePath: string): Promise<void> => {
+const rewriteFile = async (filePath) => {
   const source = await readFile(filePath, "utf8");
   const rewritten = rewriteSource(filePath, source);
   if (rewritten !== source) {
@@ -50,7 +50,7 @@ const rewriteFile = async (filePath: string): Promise<void> => {
   }
 };
 
-const walk = async (directory: string): Promise<void> => {
+const walk = async (directory) => {
   const entries = await readdir(directory);
   await Promise.all(
     entries.map(async (entry) => {

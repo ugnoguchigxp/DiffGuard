@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -35,7 +35,6 @@ describe("diffGuard MCP service", () => {
       "analyze_diff",
       "review_diff",
       "review_batch",
-      "generate_fix",
     ]);
   });
 
@@ -150,6 +149,30 @@ describe("diffGuard MCP service", () => {
     }
   });
 
+  it("accepts sourceFilePaths as fallback when files are omitted", async () => {
+    const workspaceRoot = await mkdtemp(path.join(tmpdir(), "diffguard-mcp-source-fallback-"));
+    const service = createDiffGuardMcpService();
+
+    try {
+      const sourcePath = path.join(workspaceRoot, "src/task.ts");
+      await mkdir(path.dirname(sourcePath), { recursive: true });
+      await writeFile(sourcePath, "export const value = 1;\n");
+      const diff = "@@ -1,1 +1,1 @@\n-export const value = 1;\n+export const value = 2;";
+
+      const result = await service.callTool("review_diff", {
+        diff,
+        workspaceRoot,
+        sourceFilePaths: [sourcePath],
+      });
+
+      expect(result.isError).toBeUndefined();
+      const payload = parseJsonTextContent(result.content);
+      expect(payload).toHaveProperty("result");
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns batchSummary when comparing candidates", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "diffguard-mcp-candidates-"));
     const service = createDiffGuardMcpService();
@@ -214,11 +237,11 @@ describe("diffGuard MCP service", () => {
   it("does not leak workspace .env values into process.env", async () => {
     const workspaceRoot = await mkdtemp(path.join(tmpdir(), "diffguard-mcp-env-"));
     const service = createDiffGuardMcpService();
-    const previousMode = process.env.DIFFGUARD_LLM_MODE;
-    delete process.env.DIFFGUARD_LLM_MODE;
+    const previousMode = process.env.DIFFGUARD_TEST_MODE;
+    delete process.env.DIFFGUARD_TEST_MODE;
 
     try {
-      await writeFile(path.join(workspaceRoot, ".env"), "DIFFGUARD_LLM_MODE=local-openai-api\n");
+      await writeFile(path.join(workspaceRoot, ".env"), "DIFFGUARD_TEST_MODE=from-env-file\n");
 
       const diff = [
         "diff --git a/src/task.ts b/src/task.ts",
@@ -236,10 +259,10 @@ describe("diffGuard MCP service", () => {
       });
 
       expect(result.isError).toBeUndefined();
-      expect(process.env.DIFFGUARD_LLM_MODE).toBeUndefined();
+      expect(process.env.DIFFGUARD_TEST_MODE).toBeUndefined();
     } finally {
       if (previousMode !== undefined) {
-        process.env.DIFFGUARD_LLM_MODE = previousMode;
+        process.env.DIFFGUARD_TEST_MODE = previousMode;
       }
       await rm(workspaceRoot, { recursive: true, force: true });
     }
